@@ -893,6 +893,11 @@
     floaters = [];
     highestCelebration = null;
     failureSequence = null;
+    if (victoryTimer) {
+      clearTimeout(victoryTimer);
+      victoryTimer = 0;
+    }
+    victoryFinishing = false;
     score = 0;
     bestBeforeGame = bestScore;
     maxLevelReached = 0;
@@ -956,12 +961,31 @@
     updateControls();
   }
 
+  /* 胜利结算：达成类事件（合出清华校徽；或解锁清华后合成出目标院系）
+   * 播完庆祝动画后自动进入结算，不再等待爆线 */
+  var victoryTimer = 0;
+  var victoryFinishing = false;
+  function scheduleVictoryFinish(delaySeconds) {
+    if (victoryTimer) {
+      return;
+    }
+    victoryTimer = setTimeout(function () {
+      victoryTimer = 0;
+      if (mode === "playing") {
+        victoryFinishing = true;
+        finishGame();
+      }
+    }, Math.round(delaySeconds * 1000));
+  }
+
   function finishGame() {
-    if (mode !== "ending") {
+    if (mode !== "ending" && !victoryFinishing) {
       return;
     }
 
+    var wasVictory = victoryFinishing;
     mode = "gameover";
+    victoryFinishing = false;
     failureSequence = null;
     var madeRecord = score > bestBeforeGame && score > 0;
 
@@ -973,7 +997,9 @@
       : (hasMergedHighestLevel ? "已合成最高等级！" : "差一点就更大了");
     newRecordElement.hidden = !madeRecord;
     gameOverOverlay.hidden = false;
-    playGameOverSound();
+    if (!wasVictory) {
+      playGameOverSound();
+    }
   }
 
   function limitAimX(value) {
@@ -1320,6 +1346,10 @@
           if (goalCollege && goalCollege.key !== "qinghua") {
             showTargetBanner(goalCollege, "achieve");
             startHighestCelebration(mergedBody);
+            /* 解锁合成大清华后开启速通规则：合成出目标院系即胜利结算 */
+            if (qinghuaUnlocked) {
+              scheduleVictoryFinish(HIGHEST_CELEBRATION_DURATION + 0.6);
+            }
           }
         }
       }
@@ -1359,6 +1389,8 @@
         if (targetCollegeKey !== "qinghua") {
           unlockQinghua();
         }
+        /* 合成大清华达成：庆祝（含彩带）播完后直接进入胜利结算 */
+        scheduleVictoryFinish(HIGHEST_CELEBRATION_DURATION * 1.4 + 0.6);
       }
       maxLevelReached = Math.max(maxLevelReached, newLevel);
       highestMergedLevel = Math.max(highestMergedLevel, newLevel);
@@ -1516,6 +1548,12 @@
   }
 
   function updateDanger(dt) {
+    if (victoryTimer) {
+      /* 胜利结算等待期间不判警戒线，避免庆祝中被失败抢先 */
+      dangerIsNear = false;
+      dangerIsCrossed = false;
+      return;
+    }
     dangerIsNear = false;
     dangerIsCrossed = false;
     items.forEach(function (body) {
