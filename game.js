@@ -53,7 +53,7 @@
   var FIXED_STEP = 1 / 120;
   var MAX_STEPS = 8;
   var GRAVITY = 1480;
-  var SOLVER_ITERATIONS = 10;
+  var SOLVER_ITERATIONS = 12;
   var AIR_DAMPING = 0.998;
   var GROUND_DRAG = 4.4;
   var CIRCLE_RESTITUTION = 0.06;
@@ -1084,8 +1084,13 @@
     }
 
     var inverseMassSum = a.invMass + b.invMass;
-    var correctionDepth = Math.max(contact.penetration - 0.12, 0);
-    var correction = correctionDepth * 0.72 / inverseMassSum;
+    /* 深穿透（同点连投形成的垂直列等高压场景）用全量修正快速分离；
+     * 浅接触保留 85% 修正 + 微 slop，维持堆叠静止稳定 */
+    var slop = 0.06;
+    var deepThreshold = Math.min(a.radius, b.radius) * 0.35;
+    var percent = contact.penetration > deepThreshold ? 1.0 : 0.85;
+    var correctionDepth = Math.max(contact.penetration - slop, 0);
+    var correction = correctionDepth * percent / inverseMassSum;
 
     a.x -= contact.nx * correction * a.invMass;
     a.y -= contact.ny * correction * a.invMass;
