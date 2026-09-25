@@ -15,6 +15,7 @@
   var pageDescription = document.getElementById("pageDescription");
   var gameTitleElement = document.getElementById("gameTitle");
   var scoreElement = document.getElementById("score");
+  var scoreMetric = document.getElementById("scoreMetric");
   var bestScoreElement = document.getElementById("bestScore");
   var gameOverOverlay = document.getElementById("gameOverOverlay");
   var gameOverMessage = document.getElementById("gameOverMessage");
@@ -125,9 +126,14 @@
   var ERO_FOCUS_MAX_AGE = 2.2;                   /* 单球视野跟随时长上限（秒） */
   var ERO_REVEAL_DURATION = 3.4;                 /* 达成后黑幕退散用时（秒） */
   var ERO_BLACKOUT_DURATION = 1.2;               /* 失败黑化用时（秒） */
+  var ERO_PILE_SPEED = 10;                       /* 判定“球堆已静止”的速度阈值（px/s） */
+  var ERO_PILE_HOLD = 0.18;                      /* 球堆需连续静止多久才允许下一投（秒） */
+  var ERO_PILE_MAX_WAIT = 3.0;                   /* 等待上限（秒）：极端情况下的安全阀，不会永久卡住投放 */
   var eroFocusBody = null;                       /* 当前亮着的小球 */
   var eroFocusStable = 0;
   var eroFocusAge = 0;
+  var eroPileStableTime = 0;                     /* 球堆连续静止时长 */
+  var eroPileWaitTime = 0;                       /* 已等待球堆静止的时长 */
   var eroReveal = null;                          /* 达成：以目标球为中心向外退散的黑幕 */
 
   function clamp(value, minimum, maximum) {
@@ -1006,9 +1012,13 @@
   function updateControls() {
     restartButton.disabled = mode !== "playing";
     targetButton.disabled = mode !== "playing";
-    /* 外观切换键只在「没有对局进行」时出现（选目标 / 本局结算），游玩界面不显示 */
+    /* 明暗切换键：只有游玩界面不显示；选择界面（含中途「换目标」）与结算界面正常显示 */
     if (themeButton) {
-      themeButton.hidden = !(mode === "gameover" || (mode === "selecting" && !pickerCanCancel));
+      themeButton.hidden = !(mode === "selecting" || mode === "gameover");
+    }
+    /* 中途「换目标」时隐藏当前分数，选择界面看起来像全新一局 */
+    if (scoreMetric) {
+      scoreMetric.hidden = mode === "selecting" && pickerCanCancel;
     }
   }
 
@@ -1751,7 +1761,11 @@
     if (!readyToDrop) {
       dropCooldown -= dt;
       if (dropCooldown <= 0) {
-        prepareNextItem();
+        if (eroDropGateOpen(dt)) {
+          prepareNextItem();
+        } else {
+          dropCooldown = 0;   /* 冷却已结束，仍在等球堆静止（深色外观） */
+        }
       }
     }
 
@@ -1877,11 +1891,30 @@
       eroFocusStable = 0;
       eroFocusAge = 0;
     }
-    if (mode === "playing" && readyToDrop) {
+    /* 待释放小球的位置（即使球堆尚未静止也点亮投放点，避免黑屏无参照） */
+    if (mode === "playing") {
       var radius = LEVELS[currentLevel].radius;
       return { x: aimX, y: SPAWN_Y, r: radius * 2.5 };
     }
     return null;
+  }
+
+  /* 深色外观下：必须等球堆完全静止（稳定片刻）才能释放下一颗小球 */
+  function eroDropGateOpen(dt) {
+    if (!darkMode) {
+      eroPileWaitTime = 0;
+      return true;
+    }
+    if (eroPileStableTime >= ERO_PILE_HOLD) {
+      eroPileWaitTime = 0;
+      return true;
+    }
+    eroPileWaitTime += dt;
+    if (eroPileWaitTime >= ERO_PILE_MAX_WAIT) {
+      eroPileWaitTime = 0;   /* 安全阀：球堆长久微抖时不至于永远无法投放 */
+      return true;
+    }
+    return false;
   }
 
   function focusEroBody(body) {
@@ -1898,8 +1931,24 @@
       eroFocusBody = null;
       eroFocusStable = 0;
       eroFocusAge = 0;
+      eroPileStableTime = 0;
+      eroPileWaitTime = 0;
       eroReveal = null;
       return;
+    }
+    /* 球堆是否已完全静止（深色外观：静止才允许投放下一颗） */
+    var pileMoving = false;
+    for (var pileIndex = 0; pileIndex < items.length; pileIndex += 1) {
+      var pileBody = items[pileIndex];
+      if (pileBody.popTime > 0 || Math.hypot(pileBody.vx, pileBody.vy) > ERO_PILE_SPEED) {
+        pileMoving = true;
+        break;
+      }
+    }
+    if (pileMoving) {
+      eroPileStableTime = 0;
+    } else {
+      eroPileStableTime += dt;
     }
     if (eroFocusBody && items.indexOf(eroFocusBody) >= 0) {
       /* 视野跟随当前亮着的小球：小球稳定（速度趋零片刻）或超过单球跟随上限 →
@@ -2599,11 +2648,13 @@
       mode: mode,
       target: targetCollegeKey,
       dark: darkMode,
+      pickerCanCancel: pickerCanCancel,
       vision: {
         mask: eroVisionActive(),
         focus: eroFocusBody ? eroFocusBody.id : null,
         reveal: eroReveal ? 1 : 0
       },
+      pileStable: !darkMode || eroPileStableTime >= ERO_PILE_HOLD,
       canAct: mode === "playing" && readyToDrop,
       score: score,
       nextLevel: mode === "playing" && readyToDrop ? currentLevel : null,
@@ -2902,6 +2953,10 @@
     chooseTarget: machineChooseTarget,
     debugSpawnPair: machineDebugSpawnPair,
     debugFillBoard: machineDebugFillBoard,
+    debugOpenPicker: function () {
+      openTargetPicker();
+      return mode;
+    },
     debugUnlockQinghua: function () {
       unlockQinghua();
       return qinghuaUnlocked;
