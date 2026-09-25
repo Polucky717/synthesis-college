@@ -500,15 +500,18 @@
       others[j] = swap;
     }
     /* 链本身保持 radii.length 级（普通目标）；合成大清华多一级（15 级，链顶清华校徽）；
-     * 末级彩蛋不计入普通目标链 */
+     * 末级彩蛋不计入普通目标链。
+     * 深色外观（Erosion 玩法）下合成链整体少一级：普通目标 13+1，清华目标 14。 */
+    var canonical = CONFIG.levels && CONFIG.levels.length ? CONFIG.levels : LEVELS;
     var baseChainLength = Math.max(Array.isArray(CONFIG.radii) ? CONFIG.radii.length : 14, 2);
-    var chainLength = isBonusTarget ? Math.min(baseChainLength + 1, LEVELS.length) : baseChainLength;
+    if (darkMode) {
+      baseChainLength = Math.max(baseChainLength - 1, 2);
+    }
+    var chainLength = isBonusTarget ? Math.min(baseChainLength + 1, canonical.length) : baseChainLength;
     var pickCount = Math.min(Math.max(chainLength - 1, 0), others.length);
     var chain = others.slice(0, pickCount).concat([target]);
-    var radii = CONFIG.radii;
-    var scores = CONFIG.scores;
     var built = chain.map(function (college, index) {
-      var levelInfo = LEVELS[index] || {};
+      var levelInfo = canonical[index] || {};
       return {
         key: college ? college.key : "",
         name: college ? college.name : "",
@@ -522,9 +525,9 @@
       };
     });
     /* 普通目标附挂彩蛋末级（两个链顶合并的目标）；清华目标链顶即校徽，不再附挂 */
-    if (!isBonusTarget && built.length > 0 && LEVELS.length > built.length
-        && LEVELS[LEVELS.length - 1].radius > built[built.length - 1].radius) {
-      built.push(LEVELS[LEVELS.length - 1]);
+    if (!isBonusTarget && built.length > 0 && canonical.length > built.length
+        && canonical[canonical.length - 1].radius > built[built.length - 1].radius) {
+      built.push(canonical[canonical.length - 1]);
     }
     return built;
   }
@@ -1003,6 +1006,10 @@
   function updateControls() {
     restartButton.disabled = mode !== "playing";
     targetButton.disabled = mode !== "playing";
+    /* 外观切换键只在「没有对局进行」时出现（选目标 / 本局结算），游玩界面不显示 */
+    if (themeButton) {
+      themeButton.hidden = !(mode === "gameover" || (mode === "selecting" && !pickerCanCancel));
+    }
   }
 
   function updateSoundControl() {
@@ -1142,6 +1149,7 @@
       : (hasMergedHighestLevel ? "已合成最高等级！" : "差一点就更大了");
     newRecordElement.hidden = !madeRecord;
     gameOverOverlay.hidden = false;
+    updateControls();   /* 结算界面允许切换外观 */
     if (!wasVictory) {
       playGameOverSound();
     }
@@ -2565,6 +2573,7 @@
   function machineLevels() {
     return LEVELS.map(function (level) {
       return {
+        key: level.key,
         radius: level.radius,
         score: level.score,
         image: imageFor(level),
