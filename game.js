@@ -136,6 +136,19 @@
   var eroPileStableTime = 0;                     /* 球堆连续静止时长 */
   var eroPileWaitTime = 0;                       /* 已等待球堆静止的时长 */
   var eroReveal = null;                          /* 达成：以目标球为中心向外退散的黑幕 */
+  var frameCamera = null;                        /* 本帧场景镜头（庆祝推近） */
+  var frameShakeX = 0;                           /* 本帧震屏偏移 */
+  var frameShakeY = 0;
+
+  /* 把本帧场景用到的镜头 + 震屏变换再套一遍（黑幕层要与小球严格对齐） */
+  function applySceneTransform() {
+    if (frameCamera) {
+      ctx.translate(frameCamera.x, frameCamera.y);
+      ctx.scale(frameCamera.scale, frameCamera.scale);
+      ctx.translate(-frameCamera.x, -frameCamera.y);
+    }
+    ctx.translate(frameShakeX, frameShakeY);
+  }
 
   function clamp(value, minimum, maximum) {
     return Math.max(minimum, Math.min(maximum, value));
@@ -2024,6 +2037,26 @@
     return holes;
   }
 
+  /* 小球是否整个落在某个视野孔里（也就是能被完整看见） */
+  function eroHoleContainsBall(holes, x, y, radius) {
+    for (var i = 0; i < holes.length; i += 1) {
+      if (Math.hypot(holes[i].x - x, holes[i].y - y) + radius <= holes[i].r) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /* 小球是否与某个视野孔有交集（被孔边界切到） */
+  function eroTouchesHoles(holes, x, y, radius) {
+    for (var i = 0; i < holes.length; i += 1) {
+      if (Math.hypot(holes[i].x - x, holes[i].y - y) < holes[i].r + radius) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function drawEroVision() {
     if (!eroVisionActive()) {
       return;
@@ -2033,15 +2066,60 @@
     if (holes.length === 0) {
       ctx.fillStyle = ERO_MASK_FILL;
       ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-    } else {
-      /* 单路径：外框 + 反向绕行的圆 → evenodd 填充挖出视野圆孔 */
-      ctx.beginPath();
-      ctx.rect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-      for (var i = 0; i < holes.length; i += 1) {
-        ctx.arc(holes[i].x, holes[i].y, holes[i].r, 0, Math.PI * 2, true);
+      ctx.restore();
+      return;
+    }
+    /* 单路径：外框 + 反向绕行的圆 → evenodd 填充挖出视野圆孔 */
+    ctx.beginPath();
+    ctx.rect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    for (var i = 0; i < holes.length; i += 1) {
+      ctx.arc(holes[i].x, holes[i].y, holes[i].r, 0, Math.PI * 2, true);
+    }
+    ctx.fillStyle = ERO_MASK_FILL;
+    ctx.fill("evenodd");
+
+    /* 完全遮挡：视野里只允许出现“整颗球”。被孔边界切到的球用底色补齐，
+     * 否则会出现半个球／一道月牙那种“遮了一半”的样子。 */
+    var fullyVisible = [];
+    var partial = [];
+    for (var b = 0; b < items.length; b += 1) {
+      var body = items[b];
+      if (eroHoleContainsBall(holes, body.x, body.y, body.radius)) {
+        fullyVisible.push(body);
+      } else if (eroTouchesHoles(holes, body.x, body.y, body.radius)) {
+        partial.push(body);
       }
+    }
+    var pendingVisible = mode === "playing" && ballPrepared
+      && eroHoleContainsBall(holes, aimX, SPAWN_Y, LEVELS[currentLevel].radius);
+    if (partial.length > 0) {
+      ctx.save();
+      ctx.beginPath();
+      for (var h = 0; h < holes.length; h += 1) {
+        ctx.arc(holes[h].x, holes[h].y, holes[h].r, 0, Math.PI * 2, true);
+      }
+      ctx.clip();
       ctx.fillStyle = ERO_MASK_FILL;
-      ctx.fill("evenodd");
+      for (var p = 0; p < partial.length; p += 1) {
+        ctx.beginPath();
+        /* 略放大以吞掉抗锯齿边缘与投影 */
+        ctx.arc(partial[p].x, partial[p].y, partial[p].radius + 8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+      /* 被补丁蹭到的完整小球 / 待释放小球重画一遍，保证它们依旧完整 */
+      for (var v = 0; v < fullyVisible.length; v += 1) {
+        drawItem(fullyVisible[v], 1, false);
+      }
+      if (pendingVisible) {
+        drawItem({
+          level: currentLevel,
+          radius: LEVELS[currentLevel].radius,
+          x: aimX,
+          y: SPAWN_Y,
+          popTime: 0
+        }, 0.76, true);
+      }
     }
     ctx.restore();
   }
@@ -2485,6 +2563,12 @@
     ctx.setTransform(canvasScaleX, 0, 0, canvasScaleY, 0, 0);
     ctx.save();
 
+    /* 记录本帧的场景变换（庆祝镜头 + 震屏），深色外观的黑幕要用同一套变换，
+     * 否则震屏／镜头推进时小球与视野孔会错位，看起来像“遮了一半” */
+    frameCamera = null;
+    frameShakeX = 0;
+    frameShakeY = 0;
+
     if (highestCelebration && !highestCelebration.reduced) {
       var cameraAge = highestCelebration.age;
       var firstZoom = cameraAge < 0.9 ? Math.sin(cameraAge / 0.9 * Math.PI) : 0;
@@ -2492,13 +2576,16 @@
         ? Math.sin((cameraAge - 0.9) / 0.8 * Math.PI)
         : 0;
       var cameraScale = 1 + firstZoom * 0.09 + secondZoom * 0.035;
+      frameCamera = { x: highestCelebration.x, y: highestCelebration.y, scale: cameraScale };
       ctx.translate(highestCelebration.x, highestCelebration.y);
       ctx.scale(cameraScale, cameraScale);
       ctx.translate(-highestCelebration.x, -highestCelebration.y);
     }
 
     if (shake > 0.08) {
-      ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+      frameShakeX = (Math.random() - 0.5) * shake;
+      frameShakeY = (Math.random() - 0.5) * shake;
+      ctx.translate(frameShakeX, frameShakeY);
       shake *= 0.87;
     } else {
       shake = 0;
@@ -2529,13 +2616,18 @@
     drawHighestCelebrationForeground();
     ctx.restore();
 
-    /* 视野黑幕 / 达成退散 / 失败黑化：在屏幕空间绘制（不受震屏与庆祝镜头影响），
+    /* 视野黑幕 / 达成退散 / 失败黑化：使用与场景相同的镜头与震屏，保证视野孔与小球严格对齐；
      * 警戒线在黑幕之上重绘，深色外观下始终可见 */
     if (darkMode) {
       ctx.save();
       ctx.setTransform(canvasScaleX, 0, 0, canvasScaleY, 0, 0);
+      applySceneTransform();
       drawEroVision();
       drawEroReveal();
+      ctx.restore();
+      ctx.save();
+      ctx.setTransform(canvasScaleX, 0, 0, canvasScaleY, 0, 0);
+      ctx.translate(frameShakeX, frameShakeY);
       if (mode === "playing" && !eroReveal) {
         drawDangerLine(now);
       }
