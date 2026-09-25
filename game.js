@@ -2038,7 +2038,7 @@
     return holes;
   }
 
-  /* 小球是否整个落在某个视野孔里（也就是能被完整看见） */
+  /* 小球是否整个落在某个视野孔里 */
   function eroHoleContainsBall(holes, x, y, radius) {
     for (var i = 0; i < holes.length; i += 1) {
       if (Math.hypot(holes[i].x - x, holes[i].y - y) + radius <= holes[i].r) {
@@ -2048,80 +2048,22 @@
     return false;
   }
 
-  /* 小球是否与某个视野孔有交集（被孔边界切到） */
-  function eroTouchesHoles(holes, x, y, radius) {
-    for (var i = 0; i < holes.length; i += 1) {
-      if (Math.hypot(holes[i].x - x, holes[i].y - y) < holes[i].r + radius) {
-        return true;
-      }
-    }
-    return false;
-  }
-
+  /* 视野黑幕：外框 + 反向绕行的圆 → evenodd 填充挖出视野圆孔。
+   * 原版 Erosion 的行为：圈内的东西（包括只露出一角的其它小球）都能看见，
+   * 所以这里只挖孔，绝不把圈内的小球再涂黑。 */
   function drawEroVision() {
     if (!eroVisionActive()) {
       return;
     }
     var holes = eroVisionHoles();
     ctx.save();
-    if (holes.length === 0) {
-      ctx.fillStyle = ERO_MASK_FILL;
-      ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-      ctx.restore();
-      return;
-    }
-    /* 单路径：外框 + 反向绕行的圆 → evenodd 填充挖出视野圆孔 */
     ctx.beginPath();
-    ctx.rect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    ctx.rect(-64, -64, WORLD_WIDTH + 128, WORLD_HEIGHT + 128);
     for (var i = 0; i < holes.length; i += 1) {
       ctx.arc(holes[i].x, holes[i].y, holes[i].r, 0, Math.PI * 2, true);
     }
     ctx.fillStyle = ERO_MASK_FILL;
     ctx.fill("evenodd");
-
-    /* 完全遮挡：视野里只允许出现“整颗球”。被孔边界切到的球用底色补齐，
-     * 否则会出现半个球／一道月牙那种“遮了一半”的样子。 */
-    var fullyVisible = [];
-    var partial = [];
-    for (var b = 0; b < items.length; b += 1) {
-      var body = items[b];
-      if (eroHoleContainsBall(holes, body.x, body.y, body.radius)) {
-        fullyVisible.push(body);
-      } else if (eroTouchesHoles(holes, body.x, body.y, body.radius)) {
-        partial.push(body);
-      }
-    }
-    var pendingVisible = mode === "playing" && ballPrepared
-      && eroHoleContainsBall(holes, aimX, SPAWN_Y, LEVELS[currentLevel].radius);
-    if (partial.length > 0) {
-      ctx.save();
-      ctx.beginPath();
-      for (var h = 0; h < holes.length; h += 1) {
-        ctx.arc(holes[h].x, holes[h].y, holes[h].r, 0, Math.PI * 2, true);
-      }
-      ctx.clip();
-      ctx.fillStyle = ERO_MASK_FILL;
-      for (var p = 0; p < partial.length; p += 1) {
-        ctx.beginPath();
-        /* 略放大以吞掉抗锯齿边缘与投影 */
-        ctx.arc(partial[p].x, partial[p].y, partial[p].radius + 8, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
-      /* 被补丁蹭到的完整小球 / 待释放小球重画一遍，保证它们依旧完整 */
-      for (var v = 0; v < fullyVisible.length; v += 1) {
-        drawItem(fullyVisible[v], 1, false);
-      }
-      if (pendingVisible) {
-        drawItem({
-          level: currentLevel,
-          radius: LEVELS[currentLevel].radius,
-          x: aimX,
-          y: SPAWN_Y,
-          popTime: 0
-        }, 0.76, true);
-      }
-    }
     ctx.restore();
   }
 
@@ -2135,7 +2077,7 @@
     ctx.beginPath();
     ctx.rect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     ctx.arc(eroReveal.x, eroReveal.y, eroReveal.r + eased * Math.hypot(WORLD_WIDTH, WORLD_HEIGHT) * 0.62, 0, Math.PI * 2, true);
-    ctx.fillStyle = "rgba(8, 8, 10, " + (0.99 * (1 - progress * 0.15)) + ")";
+    ctx.fillStyle = ERO_MASK_FILL;
     ctx.fill("evenodd");
     ctx.restore();
   }
