@@ -121,7 +121,7 @@
 
   /* ===== 深色外观（参考「合成大群友」Erosion 挑战）：
    * 月饼院徽 + 暗色界面 + 只看得见当前小球周围一圈的视野黑幕 ===== */
-  var ERO_MASK_FILL = "rgba(7, 8, 10, 0.99)";     /* 视野黑幕 */
+  var ERO_MASK_FILL = "rgba(4, 5, 7, 1)";         /* 视野黑幕：完全不透明、纯色（不留任何斜向渐变） */
   var ERO_FOCUS_SPEED = 6;                       /* 视为静止的速度阈值 */
   var ERO_FOCUS_STABLE = 0.45;                   /* 静止多久后视野交棒（秒） */
   var ERO_FOCUS_MAX_AGE = 2.2;                   /* 单球视野跟随时长上限（秒） */
@@ -606,13 +606,14 @@
     var highMix = 0.86 + (seed % 2) * 0.03;
     var board = canvas.parentElement;
     if (darkMode) {
+      /* 深色外观：板面必须是“纯色、不透明”的底。
+       * 之前这里是斜向渐变（学院色混黑），画布又每帧清空，于是斜向色带会从
+       * 半透明黑幕里透出来、并在视野孔内整片露出，看起来就是“没遮住 + 斜边”。 */
       if (board && board.style) {
-        board.style.background = "linear-gradient(" + dirBoard + ", "
-          + mixWithBlack(rgb, 0.86) + " 0%, " + mixWithBlack(rgb, 0.95) + " 100%)";
+        board.style.background = mixWithBlack(rgb, 0.82);
       }
       if (document.body && document.body.style) {
-        document.body.style.background = "linear-gradient(" + dirBody + ", "
-          + mixWithBlack(rgb, 0.95) + " 0%, " + mixWithBlack(rgb, 0.9) + " 100%)";
+        document.body.style.background = mixWithBlack(rgb, 0.9);
       }
       return;
     }
@@ -2154,7 +2155,7 @@
       return;
     }
     ctx.save();
-    ctx.fillStyle = "rgba(6, 6, 8, " + (alpha * 0.97) + ")";
+    ctx.fillStyle = "rgba(4, 5, 7, " + alpha + ")";
     ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     ctx.restore();
   }
@@ -2193,18 +2194,21 @@
   }
 
   function drawItemBackground(radius) {
+    if (darkMode) {
+      /* 深色外观：球底也用纯色，避免视野孔里出现斜向渐变 */
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, 0, Math.PI * 2);
+      ctx.fillStyle = "#14151b";
+      ctx.fill();
+      return;
+    }
     var angle = 120 * Math.PI / 180;
     var reach = radius * Math.SQRT2;
     var dx = Math.sin(angle) * reach;
     var dy = -Math.cos(angle) * reach;
     var gradient = ctx.createLinearGradient(-dx, -dy, dx, dy);
-    if (darkMode) {
-      gradient.addColorStop(0, "#17151d");
-      gradient.addColorStop(1, "#0a0a0d");
-    } else {
-      gradient.addColorStop(0, "#fdfbfb");
-      gradient.addColorStop(1, "#ebedee");
-    }
+    gradient.addColorStop(0, "#fdfbfb");
+    gradient.addColorStop(1, "#ebedee");
     ctx.beginPath();
     ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.fillStyle = gradient;
