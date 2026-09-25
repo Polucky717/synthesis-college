@@ -141,13 +141,14 @@
   var frameShakeY = 0;
 
   /* 把本帧场景用到的镜头 + 震屏变换再套一遍（黑幕层要与小球严格对齐） */
-  function applySceneTransform() {
+  function applySceneTransform(target) {
+    var surface = target || ctx;
     if (frameCamera) {
-      ctx.translate(frameCamera.x, frameCamera.y);
-      ctx.scale(frameCamera.scale, frameCamera.scale);
-      ctx.translate(-frameCamera.x, -frameCamera.y);
+      surface.translate(frameCamera.x, frameCamera.y);
+      surface.scale(frameCamera.scale, frameCamera.scale);
+      surface.translate(-frameCamera.x, -frameCamera.y);
     }
-    ctx.translate(frameShakeX, frameShakeY);
+    surface.translate(frameShakeX, frameShakeY);
   }
 
   function clamp(value, minimum, maximum) {
@@ -2048,22 +2049,77 @@
     return false;
   }
 
-  /* 视野黑幕：外框 + 反向绕行的圆 → evenodd 填充挖出视野圆孔。
-   * 原版 Erosion 的行为：圈内的东西（包括只露出一角的其它小球）都能看见，
-   * 所以这里只挖孔，绝不把圈内的小球再涂黑。 */
+  /* 任意两个视野孔是否重叠（重叠时必须走离屏擦除，否则会留下黑色透镜） */
+  function eroVisionHolesOverlap() {
+    var holes = eroVisionHoles();
+    for (var i = 0; i < holes.length; i += 1) {
+      for (var j = i + 1; j < holes.length; j += 1) {
+        if (Math.hypot(holes[i].x - holes[j].x, holes[i].y - holes[j].y) < holes[i].r + holes[j].r) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /* 离屏黑幕画布：黑幕先在这里合成，再用 destination-out 擦出视野孔。
+   * 不能用 evenodd 单路径挖多个孔：两个孔重叠时重叠区会被重新填黑，
+   * 剩下两块“月牙”并带出斜直边（就是之前看到的斜光带 + 遮不干净）。 */
+  var eroMaskSurface = null;
+
+  function eroMaskContext() {
+    if (!eroMaskSurface) {
+      eroMaskSurface = document.createElement("canvas");
+    }
+    if (eroMaskSurface.width !== canvas.width || eroMaskSurface.height !== canvas.height) {
+      eroMaskSurface.width = canvas.width;
+      eroMaskSurface.height = canvas.height;
+    }
+    return eroMaskSurface.getContext ? eroMaskSurface.getContext("2d") : null;
+  }
+
+  /* 视野黑幕：整个板面铺满不透明黑，再擦出视野圆孔（孔内一切都能看见，
+   * 包括只露出一角的其它小球 —— 与原版 Erosion 一致） */
   function drawEroVision() {
     if (!eroVisionActive()) {
       return;
     }
     var holes = eroVisionHoles();
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(-64, -64, WORLD_WIDTH + 128, WORLD_HEIGHT + 128);
-    for (var i = 0; i < holes.length; i += 1) {
-      ctx.arc(holes[i].x, holes[i].y, holes[i].r, 0, Math.PI * 2, true);
+    var maskCtx = eroMaskContext();
+    if (!maskCtx) {
+      /* 退化路径：没有 2D 上下文时直接在主画布上用 evenodd 挖孔 */
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(-64, -64, WORLD_WIDTH + 128, WORLD_HEIGHT + 128);
+      for (var f = 0; f < holes.length; f += 1) {
+        ctx.arc(holes[f].x, holes[f].y, holes[f].r, 0, Math.PI * 2, true);
+      }
+      ctx.fillStyle = ERO_MASK_FILL;
+      ctx.fill("evenodd");
+      ctx.restore();
+      return;
     }
-    ctx.fillStyle = ERO_MASK_FILL;
-    ctx.fill("evenodd");
+    maskCtx.setTransform(1, 0, 0, 1, 0, 0);
+    maskCtx.globalCompositeOperation = "source-over";
+    maskCtx.clearRect(0, 0, eroMaskSurface.width, eroMaskSurface.height);
+    maskCtx.fillStyle = ERO_MASK_FILL;
+    maskCtx.fillRect(0, 0, eroMaskSurface.width, eroMaskSurface.height);
+
+    maskCtx.save();
+    maskCtx.globalCompositeOperation = "destination-out";
+    maskCtx.setTransform(canvasScaleX, 0, 0, canvasScaleY, 0, 0);
+    applySceneTransform(maskCtx);
+    maskCtx.fillStyle = "#000000";
+    for (var i = 0; i < holes.length; i += 1) {
+      maskCtx.beginPath();
+      maskCtx.arc(holes[i].x, holes[i].y, holes[i].r, 0, Math.PI * 2);
+      maskCtx.fill();
+    }
+    maskCtx.restore();
+
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(eroMaskSurface, 0, 0);
     ctx.restore();
   }
 
@@ -2727,6 +2783,7 @@
         focus: eroFocusBody ? eroFocusBody.id : null,
         holes: eroVisionHoles().length,
         holeList: eroVisionHoles(),
+        overlap: eroVisionHolesOverlap(),
         reveal: eroReveal ? 1 : 0
       },
       spawn: {
