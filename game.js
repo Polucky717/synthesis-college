@@ -24,6 +24,8 @@
   var againButton = document.getElementById("againButton");
   var soundButton = document.getElementById("soundButton");
   var soundIcon = document.getElementById("soundIcon");
+  var themeButton = document.getElementById("themeButton");
+  var themeIcon = document.getElementById("themeIcon");
   var restartButton = document.getElementById("restartButton");
   var restartConfirmOverlay = document.getElementById("restartConfirmOverlay");
   var restartCancelButton = document.getElementById("restartCancelButton");
@@ -87,6 +89,7 @@
   var score = 0;
   var bestScore = loadBestScore();
   var qinghuaUnlocked = loadQinghuaUnlocked();
+  var darkMode = loadDarkMode();
   var bestBeforeGame;
   var maxLevelReached = 0;
   var hasMergedHighestLevel = false;
@@ -113,6 +116,19 @@
   var targetCollegeKey = null;  /* P3: 当前合成目标书院 key */
   var pickerCanCancel = false;  /* P3: 目标选择弹窗可否取消（对局中打开时） */
   var reducedMotionQuery = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+
+  /* ===== 深色外观（参考「合成大群友」Erosion 挑战）：
+   * 月饼院徽 + 暗色界面 + 只看得见当前小球周围一圈的视野黑幕 ===== */
+  var ERO_MASK_FILL = "rgba(7, 8, 10, 0.99)";     /* 视野黑幕 */
+  var ERO_FOCUS_SPEED = 6;                       /* 视为静止的速度阈值 */
+  var ERO_FOCUS_STABLE = 0.45;                   /* 静止多久后视野交棒（秒） */
+  var ERO_FOCUS_MAX_AGE = 2.2;                   /* 单球视野跟随时长上限（秒） */
+  var ERO_REVEAL_DURATION = 3.4;                 /* 达成后黑幕退散用时（秒） */
+  var ERO_BLACKOUT_DURATION = 1.2;               /* 失败黑化用时（秒） */
+  var eroFocusBody = null;                       /* 当前亮着的小球 */
+  var eroFocusStable = 0;
+  var eroFocusAge = 0;
+  var eroReveal = null;                          /* 达成：以目标球为中心向外退散的黑幕 */
 
   function clamp(value, minimum, maximum) {
     return Math.max(minimum, Math.min(maximum, value));
@@ -295,6 +311,7 @@
     maxSpawnLevelIndex = clamp(maxSpawnLevelIndex, 1, levels.length - 2);
 
     return {
+      id: configId,
       storageKey: textOr(source.storageKey, "merge-game:" + configId + ":best:v1"),
       assetBase: assetBase,
       levels: levels,
@@ -305,6 +322,13 @@
       maxSpawnLevelIndex: maxSpawnLevelIndex,
       spawnLevelCount: clamp(requestedSpawnLevelCount, 1, levels.length),
       progressiveUnlock: source.progressiveUnlock === true,
+      theme: {
+        darkImageDir: textOr(source.theme && source.theme.darkImageDir, ""),
+        darkImageMap: source.theme && source.theme.darkImageMap && typeof source.theme.darkImageMap === "object"
+          ? source.theme.darkImageMap
+          : null,
+        darkTitle: textOr(source.theme && source.theme.darkTitle, "☾ ◐ ◯ ◑ ☽")
+      },
       ui: {
         title: textOr(rawUi.title, "合成游戏"),
         description: textOr(rawUi.description, "无需安装，打开即玩的纯 JavaScript 合成小游戏。")
@@ -404,7 +428,7 @@
       if ("decoding" in image) {
         image.decoding = "async";
       }
-      var source = resolveAssetUrl(level.image);
+      var source = resolveAssetUrl(imageFor(level));
       if (source) {
         image.addEventListener("load", function () {
           processCircularBadge(image, level);
@@ -505,9 +529,12 @@
     return built;
   }
 
-  /* 标题规则：两字词 →「合成大X」，三字 →「合成X」；开局前用 ui.title（合成大院系） */
+  /* 标题规则：两字词 →「合成大X」，三字 →「合成X」；开局前用 ui.title（合成大院系）；
+   * 深色外观下标题改为月相符号（参考 Erosion 挑战的挑战名标题） */
   function setGameTitle(college) {
-    var title = targetGoalText(college) || textOr(CONFIG.ui.title, "合成大院系");
+    var title = darkMode
+      ? textOr(CONFIG.theme && CONFIG.theme.darkTitle, "☾ ◐ ◯ ◑ ☽")
+      : (targetGoalText(college) || textOr(CONFIG.ui.title, "合成大院系"));
     document.title = title;
     gameTitleElement.textContent = title;
   }
@@ -531,8 +558,17 @@
     return "rgb(" + r + ", " + g + ", " + b + ")";
   }
 
+  /* 深色外观：把院系色压到近黑（保留一点色相，避免整块死黑） */
+  function mixWithBlack(rgb, amount) {
+    var r = Math.round(rgb.r * (1 - amount));
+    var g = Math.round(rgb.g * (1 - amount));
+    var b = Math.round(rgb.b * (1 - amount));
+    return "rgb(" + r + ", " + g + ", " + b + ")";
+  }
+
   /* 以目标院系色为主色调的淡雅渐变背景（不过深）；
-   * 同类色系的书院/院系在渐变方向与深浅上再做区分 */
+   * 同类色系的书院/院系在渐变方向与深浅上再做区分；
+   * 深色外观（Erosion 风格）下转为近黑的暗色渐变 */
   function applyTheme(college) {
     var colorHex = college ? college.color : null;
     var rgb = hexToRgb(colorHex) || hexToRgb("#6f55c6");
@@ -546,6 +582,17 @@
     var lowMix = 0.43 + (seed % 3) * 0.025;
     var highMix = 0.86 + (seed % 2) * 0.03;
     var board = canvas.parentElement;
+    if (darkMode) {
+      if (board && board.style) {
+        board.style.background = "linear-gradient(" + dirBoard + ", "
+          + mixWithBlack(rgb, 0.86) + " 0%, " + mixWithBlack(rgb, 0.95) + " 100%)";
+      }
+      if (document.body && document.body.style) {
+        document.body.style.background = "linear-gradient(" + dirBody + ", "
+          + mixWithBlack(rgb, 0.95) + " 0%, " + mixWithBlack(rgb, 0.9) + " 100%)";
+      }
+      return;
+    }
     if (board && board.style) {
       board.style.background = "linear-gradient(" + dirBoard + ", " + mixWithWhite(rgb, lowMix) + " 0%, " + mixWithWhite(rgb, highMix) + " 100%)";
     }
@@ -574,7 +621,7 @@
       option.setAttribute("data-key", college.key);
       option.setAttribute("title", college.name || college.short || "");
       var image = document.createElement("img");
-      image.src = resolveAssetUrl(college.image);
+      image.src = resolveAssetUrl(imageFor(college));
       image.alt = college.name;
       var label = document.createElement("span");
       label.textContent = college.short;
@@ -626,11 +673,11 @@
         }
       }
       if (iconLink && iconLink.setAttribute) {
-        iconLink.setAttribute("href", resolveAssetUrl(college.image));
+        iconLink.setAttribute("href", resolveAssetUrl(imageFor(college)));
       }
       var themeMeta = document.querySelector ? document.querySelector('meta[name="theme-color"]') : null;
       if (themeMeta && themeMeta.setAttribute) {
-        themeMeta.setAttribute("content", college.color);
+        themeMeta.setAttribute("content", darkMode ? "#0b0c10" : college.color);
       }
     } catch (error) {
       // 图标更新是锦上添花，失败不影响游戏
@@ -648,7 +695,7 @@
     var isBonus = mode === "bonus";
     try {
       if (targetBannerImage) {
-        targetBannerImage.src = resolveAssetUrl(college.image);
+        targetBannerImage.src = resolveAssetUrl(imageFor(college));
         targetBannerImage.alt = college.name || "";
       }
       if (targetBannerText) {
@@ -739,6 +786,104 @@
     qinghuaUnlocked = true;
     saveQinghuaUnlocked();
     buildTargetGrid();
+  }
+
+  /* ===== 深色/浅色外观切换 ===== */
+  function themeStorageKey() {
+    return "merge-game:" + textOr(CONFIG.id, "default") + ":theme:v1";
+  }
+
+  function loadDarkMode() {
+    try {
+      return window.localStorage.getItem(themeStorageKey()) === "dark";
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function saveDarkMode() {
+    try {
+      window.localStorage.setItem(themeStorageKey(), darkMode ? "dark" : "light");
+    } catch (error) {
+      // Storage unavailable — theme stays session-only
+    }
+  }
+
+  /* 深色院徽：同一文件名换到月饼图目录（img/round/ → img/round-dark/）；
+   * 单文件版用 theme.darkImageMap 直接映射成 data URL */
+  function darkImageFor(image) {
+    var theme = CONFIG.theme || {};
+    var file = String(image || "").split("/").pop();
+    if (!file) {
+      return "";
+    }
+    if (theme.darkImageMap && theme.darkImageMap[file]) {
+      return theme.darkImageMap[file];
+    }
+    return theme.darkImageDir ? theme.darkImageDir + file : "";
+  }
+
+  /* 取当前主题下的图片路径（source 可为 level / college） */
+  function imageFor(source) {
+    var image = source ? source.image : "";
+    if (!darkMode) {
+      return image;
+    }
+    return darkImageFor(image) || image;
+  }
+
+  /* 当前已选目标院系（未选目标时为 null；清华彩蛋目标也能解析） */
+  function currentTargetCollege() {
+    if (!targetCollegeKey) {
+      return null;
+    }
+    var college = collegeByKey(targetCollegeKey);
+    if (!college) {
+      var bonus = bonusTargetCollege();
+      if (bonus && bonus.key === targetCollegeKey) {
+        college = bonus;
+      }
+    }
+    return college;
+  }
+
+  /* 应用外观：主题类名、切换按钮、院徽贴图、渐变背景、标题、图标 */
+  function applyAppearance() {
+    if (document.body && document.body.classList) {
+      if (darkMode) {
+        document.body.classList.add("theme-dark");
+      } else {
+        document.body.classList.remove("theme-dark");
+      }
+    }
+    if (themeIcon) {
+      themeIcon.textContent = darkMode ? "☀" : "☾";
+    }
+    if (themeButton) {
+      themeButton.setAttribute("aria-label", darkMode ? "切换浅色外观" : "切换深色外观");
+      themeButton.setAttribute("aria-pressed", darkMode ? "true" : "false");
+    }
+    LEVEL_ASSETS = preloadLevelAssets();
+    var college = currentTargetCollege();
+    applyTheme(college);
+    setGameTitle(college);
+    updatePageIcons(college);
+    buildTargetGrid();
+  }
+
+  function setDarkMode(next) {
+    var value = Boolean(next);
+    if (value === darkMode) {
+      return darkMode;
+    }
+    darkMode = value;
+    eroFocusBody = null;
+    eroFocusStable = 0;
+    eroFocusAge = 0;
+    eroReveal = null;
+    saveDarkMode();
+    applyAppearance();
+    return darkMode;
   }
 
   function saveBestScore() {
@@ -1028,7 +1173,9 @@
     }
 
     aimX = limitAimX(aimX);
-    items.push(makeItem(currentLevel, aimX, SPAWN_Y, 0, 20, "drop"));
+    var dropped = makeItem(currentLevel, aimX, SPAWN_Y, 0, 20, "drop");
+    items.push(dropped);
+    focusEroBody(dropped);   /* 深色外观：视野跟随刚投放的小球 */
     maxLevelReached = Math.max(maxLevelReached, currentLevel);
     readyToDrop = false;
     dropCooldown = 0.42;
@@ -1337,6 +1484,7 @@
       y = Math.min(y, FLOOR - radius);
       var mergedBody = makeItem(newLevel, x, y, vx, vy, "merge");
       created.push(mergedBody);
+      focusEroBody(mergedBody);   /* 深色外观：合成出的新球接管视野 */
       /* 达成目标：合成出当前目标院系/校徽的球——两行横幅 + 球体闪烁庆祝 */
       if (LEVELS[newLevel] && LEVELS[newLevel].key === targetCollegeKey) {
         if (!targetAchieved) {
@@ -1346,6 +1494,7 @@
           if (goalCollege && goalCollege.key !== "qinghua") {
             showTargetBanner(goalCollege, "achieve");
             startHighestCelebration(mergedBody);
+            startEroReveal(mergedBody.x, mergedBody.y);   /* 深色外观：黑幕退散露出全场 */
             /* 解锁合成大清华后开启速通规则：合成出目标院系即胜利结算 */
             if (qinghuaUnlocked) {
               scheduleVictoryFinish(HIGHEST_CELEBRATION_DURATION + 0.6);
@@ -1390,6 +1539,7 @@
           unlockQinghua();
         }
         /* 合成大清华达成：庆祝（含彩带）播完后直接进入胜利结算 */
+        startEroReveal(mergedBody.x, mergedBody.y);
         scheduleVictoryFinish(HIGHEST_CELEBRATION_DURATION * 1.4 + 0.6);
       }
       maxLevelReached = Math.max(maxLevelReached, newLevel);
@@ -1666,6 +1816,7 @@
     applyMerges(candidates);
     updateEffects(dt);
     updateDanger(dt);
+    updateEroVision(dt);
   }
 
   function drawDangerLine(now) {
@@ -1691,9 +1842,150 @@
       ctx.stroke();
     } else {
       ctx.lineWidth = 1.4;
-      ctx.strokeStyle = dangerIsNear ? "rgba(220, 63, 76, 0.62)" : "rgba(174, 159, 140, 0.55)";
+      /* 深色外观下警戒线为白色（参考 Erosion 挑战），且会在视野黑幕之上重绘 */
+      ctx.strokeStyle = darkMode
+        ? (dangerIsNear ? "rgba(255, 255, 255, 0.9)" : "rgba(255, 255, 255, 0.55)")
+        : (dangerIsNear ? "rgba(220, 63, 76, 0.62)" : "rgba(174, 159, 140, 0.55)");
       ctx.stroke();
     }
+    ctx.restore();
+  }
+
+  /* ===== 深色外观的视野系统（参考「合成大群友」Erosion 挑战）：
+   * 只看得见当前小球与周围一圈（可见半径 = 小球半径 × 2.5）圆环内的景象，
+   * 其余部分被近黑遮罩盖住；警戒线在黑幕之上重绘，始终可见。 ===== */
+
+  function eroVisionActive() {
+    return darkMode && mode === "playing" && !eroReveal;
+  }
+
+  function eroFocusInfo() {
+    if (eroFocusBody) {
+      if (items.indexOf(eroFocusBody) >= 0) {
+        return { x: eroFocusBody.x, y: eroFocusBody.y, r: eroFocusBody.radius * 2.5 };
+      }
+      /* 亮着的小球已被合成/移除 → 立即交棒给下一个待释放小球 */
+      eroFocusBody = null;
+      eroFocusStable = 0;
+      eroFocusAge = 0;
+    }
+    if (mode === "playing" && readyToDrop) {
+      var radius = LEVELS[currentLevel].radius;
+      return { x: aimX, y: SPAWN_Y, r: radius * 2.5 };
+    }
+    return null;
+  }
+
+  function focusEroBody(body) {
+    if (!darkMode || !body) {
+      return;
+    }
+    eroFocusBody = body;
+    eroFocusStable = 0;
+    eroFocusAge = 0;
+  }
+
+  function updateEroVision(dt) {
+    if (!darkMode) {
+      eroFocusBody = null;
+      eroFocusStable = 0;
+      eroFocusAge = 0;
+      eroReveal = null;
+      return;
+    }
+    if (eroFocusBody && items.indexOf(eroFocusBody) >= 0) {
+      /* 视野跟随当前亮着的小球：小球稳定（速度趋零片刻）或超过单球跟随上限 →
+       * 立即交棒给待释放小球；期间参与合成则由新球接管并重新计时 */
+      var speed = Math.hypot(eroFocusBody.vx, eroFocusBody.vy);
+      if (speed < ERO_FOCUS_SPEED) {
+        eroFocusStable += dt;
+      } else {
+        eroFocusStable = 0;
+      }
+      eroFocusAge += dt;
+      if (eroFocusStable >= ERO_FOCUS_STABLE || eroFocusAge >= ERO_FOCUS_MAX_AGE) {
+        eroFocusBody = null;
+        eroFocusStable = 0;
+        eroFocusAge = 0;
+      }
+    }
+    if (eroReveal) {
+      eroReveal.age += dt;
+      if (eroReveal.age >= eroReveal.duration) {
+        eroReveal = null;
+      }
+    }
+  }
+
+  /* 达成目标：黑幕以目标球为中心缓慢向外退散，露出全场 */
+  function startEroReveal(x, y) {
+    if (!darkMode) {
+      return;
+    }
+    eroReveal = {
+      x: x,
+      y: y,
+      r: 40,
+      age: 0,
+      duration: prefersReducedMotion() ? 0.8 : ERO_REVEAL_DURATION
+    };
+    eroFocusBody = null;
+    eroFocusStable = 0;
+    eroFocusAge = 0;
+  }
+
+  function drawEroVision() {
+    if (!eroVisionActive()) {
+      return;
+    }
+    var focus = eroFocusInfo();
+    ctx.save();
+    if (!focus) {
+      ctx.fillStyle = ERO_MASK_FILL;
+      ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    } else {
+      /* 单路径：外框 + 反向绕行的圆 → evenodd 填充挖出视野圆孔 */
+      ctx.beginPath();
+      ctx.rect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+      ctx.arc(focus.x, focus.y, focus.r, 0, Math.PI * 2, true);
+      ctx.fillStyle = ERO_MASK_FILL;
+      ctx.fill("evenodd");
+    }
+    ctx.restore();
+  }
+
+  function drawEroReveal() {
+    if (!eroReveal) {
+      return;
+    }
+    var progress = clamp(eroReveal.age / eroReveal.duration, 0, 1);
+    var eased = progress * progress * (3 - 2 * progress);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    ctx.arc(eroReveal.x, eroReveal.y, eroReveal.r + eased * Math.hypot(WORLD_WIDTH, WORLD_HEIGHT) * 0.62, 0, Math.PI * 2, true);
+    ctx.fillStyle = "rgba(8, 8, 10, " + (0.99 * (1 - progress * 0.15)) + ")";
+    ctx.fill("evenodd");
+    ctx.restore();
+  }
+
+  /* 失败黑化：深色外观下，警戒线告破后画面逐渐压黑，再弹出结算 */
+  function drawEroBlackout() {
+    if (!darkMode) {
+      return;
+    }
+    var alpha = 0;
+    if (mode === "ending" && failureSequence) {
+      alpha = clamp(failureSequence.age / ERO_BLACKOUT_DURATION, 0, 1);
+    } else if (mode === "gameover") {
+      alpha = 1;
+    }
+    if (alpha <= 0) {
+      return;
+    }
+    ctx.save();
+    ctx.fillStyle = "rgba(6, 6, 8, " + (alpha * 0.97) + ")";
+    ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     ctx.restore();
   }
 
@@ -1736,8 +2028,13 @@
     var dx = Math.sin(angle) * reach;
     var dy = -Math.cos(angle) * reach;
     var gradient = ctx.createLinearGradient(-dx, -dy, dx, dy);
-    gradient.addColorStop(0, "#fdfbfb");
-    gradient.addColorStop(1, "#ebedee");
+    if (darkMode) {
+      gradient.addColorStop(0, "#17151d");
+      gradient.addColorStop(1, "#0a0a0d");
+    } else {
+      gradient.addColorStop(0, "#fdfbfb");
+      gradient.addColorStop(1, "#ebedee");
+    }
     ctx.beginPath();
     ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.fillStyle = gradient;
@@ -2139,6 +2436,20 @@
     drawParticles();
     drawHighestCelebrationForeground();
     ctx.restore();
+
+    /* 视野黑幕 / 达成退散 / 失败黑化：在屏幕空间绘制（不受震屏与庆祝镜头影响），
+     * 警戒线在黑幕之上重绘，深色外观下始终可见 */
+    if (darkMode) {
+      ctx.save();
+      ctx.setTransform(canvasScaleX, 0, 0, canvasScaleY, 0, 0);
+      drawEroVision();
+      drawEroReveal();
+      if (mode === "playing" && !eroReveal) {
+        drawDangerLine(now);
+      }
+      drawEroBlackout();
+      ctx.restore();
+    }
   }
 
   function animationFrame(now) {
@@ -2256,7 +2567,7 @@
       return {
         radius: level.radius,
         score: level.score,
-        image: level.image,
+        image: imageFor(level),
         name: level.name
       };
     });
@@ -2278,6 +2589,12 @@
     return {
       mode: mode,
       target: targetCollegeKey,
+      dark: darkMode,
+      vision: {
+        mask: eroVisionActive(),
+        focus: eroFocusBody ? eroFocusBody.id : null,
+        reveal: eroReveal ? 1 : 0
+      },
       canAct: mode === "playing" && readyToDrop,
       score: score,
       nextLevel: mode === "playing" && readyToDrop ? currentLevel : null,
@@ -2412,6 +2729,14 @@
     }
   });
 
+  /* 外观切换：浅色（经典白圆院徽）/ 深色（月饼院徽 + Erosion 式视野黑幕） */
+  addPointerClickListener(themeButton, function () {
+    setDarkMode(!darkMode);
+    if (soundEnabled) {
+      playTone(darkMode ? 300 : 520, 0.09, 0.03, "triangle", 0);
+    }
+  });
+
   function finishPointerGesture(event, shouldDrop) {
     if (event.pointerId !== activePointer) {
       return;
@@ -2511,6 +2836,7 @@
   window.addEventListener("pagehide", resetFrameClock);
 
   applyUiConfig();
+  applyAppearance();
   syncCanvasResolution();
   updateSoundControl();
   if (CONFIG.selectable) {
@@ -2538,7 +2864,8 @@
     return true;
   }
 
-  function machineDebugFillBoard(level) {    if (mode !== "playing" || !LEVELS[level]) {
+  function machineDebugFillBoard(level) {
+    if (mode !== "playing" || !LEVELS[level]) {
       return false;
     }
     var radius = Math.min(LEVELS[level].radius, 34);
@@ -2569,6 +2896,12 @@
     debugUnlockQinghua: function () {
       unlockQinghua();
       return qinghuaUnlocked;
+    },
+    setDark: function (value) {
+      return setDarkMode(value);
+    },
+    isDark: function () {
+      return darkMode;
     }
   });
   window.requestAnimationFrame(animationFrame);
