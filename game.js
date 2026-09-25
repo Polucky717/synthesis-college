@@ -2010,7 +2010,9 @@
       var spawn = { x: aimX, y: SPAWN_Y, r: radius * 2.5 };
       var already = false;
       for (var i = 0; i < holes.length; i += 1) {
-        if (Math.hypot(holes[i].x - spawn.x, holes[i].y - spawn.y) < Math.max(holes[i].r, spawn.r)) {
+        /* 只有待释放小球“完全”落在已有视野孔内时才可以省掉它自己的孔，
+         * 否则小球会被偏移的孔切掉一块（曾经只比较孔的大小，导致半个球露不出来） */
+        if (Math.hypot(holes[i].x - spawn.x, holes[i].y - spawn.y) + radius <= holes[i].r) {
           already = true;
           break;
         }
@@ -2686,7 +2688,14 @@
         mask: eroVisionActive(),
         focus: eroFocusBody ? eroFocusBody.id : null,
         holes: eroVisionHoles().length,
+        holeList: eroVisionHoles(),
         reveal: eroReveal ? 1 : 0
+      },
+      spawn: {
+        aimX: aimX,
+        y: SPAWN_Y,
+        radius: LEVELS[currentLevel] ? LEVELS[currentLevel].radius : 0,
+        shake: shake
       },
       pileStable: !darkMode || eroPileStableTime >= ERO_PILE_HOLD,
       ballPrepared: ballPrepared,
@@ -2979,6 +2988,23 @@
     return true;
   }
 
+  /* 演示/测试钩子：在投放点附近造一颗小球并让它成为视野焦点（复现遮挡场景） */
+  function machineDebugFocusBall(level, dx, dy) {
+    if (!darkMode || mode !== "playing" || !LEVELS[level]) {
+      return false;
+    }
+    var radius = LEVELS[level].radius;
+    var body = makeItem(
+      level,
+      clamp(aimX + (Number(dx) || 0), LEFT_WALL + radius, RIGHT_WALL - radius),
+      clamp(SPAWN_Y + (Number(dy) || 0), radius + 1, WORLD_HEIGHT - radius - 1),
+      0, 0, "merge"
+    );
+    items.push(body);
+    focusEroBody(body);
+    return true;
+  }
+
   window.MERGE_GAME_MACHINE = Object.freeze({
     version: machineVersion,
     observe: machineObservation,
@@ -2988,6 +3014,7 @@
     chooseTarget: machineChooseTarget,
     debugSpawnPair: machineDebugSpawnPair,
     debugFillBoard: machineDebugFillBoard,
+    debugFocusBall: machineDebugFocusBall,
     debugOpenPicker: function () {
       openTargetPicker();
       return mode;
