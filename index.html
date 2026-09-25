@@ -1,11 +1,11 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#fdfbfb">
-  <meta id="pageDescription" name="description" content="娓呭崕澶у涔﹂櫌涓庨櫌绯诲窘绔犲悎鎴愬皬娓告垙">
-  <title>鍚堟垚澶ч櫌绯?/title>
+  <meta id="pageDescription" name="description" content="清华大学书院与院系徽章合成小游戏">
+  <title>合成大院系</title>
   <link rel="icon" href="assets/img/round/weiyang.png" type="image/png">
   <link rel="stylesheet" href="style.css?v=14">
 </head>
@@ -13,29 +13,29 @@
   <main class="app">
     <header class="topbar">
       <div class="brand">
-        <h1 id="gameTitle">鍚堟垚澶ч櫌绯?/h1>
-        <p>宸﹀彸鎷栧姩路鏉炬墜钀戒笅</p>
+        <h1 id="gameTitle">合成大院系</h1>
+        <p>左右拖动·松手落下</p>
       </div>
 
       <div class="metric metric-score">
-        <span>寰楀垎</span>
+        <span>得分</span>
         <strong id="score">0</strong>
       </div>
 
       <div class="metric">
-        <span>鏈€楂?/span>
+        <span>最高</span>
         <strong id="bestScore">0</strong>
       </div>
 
       <div class="header-actions">
-        <button class="icon-button theme-button" id="themeButton" type="button" tabindex="-1" aria-label="鍒囨崲娣辫壊澶栬" aria-pressed="false">
-          <span class="theme-icon" id="themeIcon" aria-hidden="true">鈽?/span>
+        <button class="icon-button theme-button" id="themeButton" type="button" tabindex="-1" aria-label="切换深色外观" aria-pressed="false">
+          <span class="theme-icon" id="themeIcon" aria-hidden="true">☾</span>
         </button>
-        <button class="icon-button" id="soundButton" type="button" tabindex="-1" aria-label="鍏抽棴澹伴煶" aria-pressed="true">
+        <button class="icon-button" id="soundButton" type="button" tabindex="-1" aria-label="关闭声音" aria-pressed="true">
           <span class="sound-icon" id="soundIcon" aria-hidden="true"></span>
         </button>
-        <button class="small-button" id="targetButton" type="button" tabindex="-1">鎹㈢洰鏍?/button>
-        <button class="small-button restart-button" id="restartButton" type="button" tabindex="-1">閲嶅紑</button>
+        <button class="small-button" id="targetButton" type="button" tabindex="-1">换目标</button>
+        <button class="small-button restart-button" id="restartButton" type="button" tabindex="-1">重开</button>
       </div>
     </header>
 
@@ -52,50 +52,50 @@
 
       <div class="overlay" id="gameOverOverlay" role="dialog" aria-modal="true" aria-labelledby="gameOverMessage" hidden>
         <div class="overlay-card game-over-card">
-          <p class="eyebrow">鏈眬缁撴潫</p>
-          <h2 id="gameOverMessage">宸竴鐐瑰氨鏇村ぇ浜?/h2>
+          <p class="eyebrow">本局结束</p>
+          <h2 id="gameOverMessage">差一点就更大了</h2>
           <div class="result-row">
-            <div><span>鏈眬寰楀垎</span><strong id="finalScore">0</strong></div>
+            <div><span>本局得分</span><strong id="finalScore">0</strong></div>
             <div>
-              <span>鏈€楂樼瓑绾?/span>
+              <span>最高等级</span>
               <div class="highest-item">
                 <img id="highestItemImage" alt="">
               </div>
             </div>
           </div>
-          <p class="new-record" id="newRecord" hidden>鏂扮邯褰曪紒</p>
-          <button class="primary-button" id="againButton" type="button" tabindex="-1">鍐嶅悎涓€娆?/button>
+          <p class="new-record" id="newRecord" hidden>新纪录！</p>
+          <button class="primary-button" id="againButton" type="button" tabindex="-1">再合一次</button>
         </div>
       </div>
 
       <div class="overlay" id="restartConfirmOverlay" role="dialog" aria-modal="true" aria-labelledby="restartConfirmTitle" hidden>
         <div class="overlay-card confirm-card">
-          <h2 id="restartConfirmTitle">閲嶆柊寮€濮嬶紵</h2>
-          <p class="confirm-copy">褰撳墠杩涘害灏嗕細涓㈠け銆?/p>
+          <h2 id="restartConfirmTitle">重新开始？</h2>
+          <p class="confirm-copy">当前进度将会丢失。</p>
           <div class="confirm-actions">
-            <button class="small-button" id="restartCancelButton" type="button" tabindex="-1">鍙栨秷</button>
-            <button class="small-button confirm-button" id="restartConfirmButton" type="button" tabindex="-1">閲嶆柊寮€濮?/button>
+            <button class="small-button" id="restartCancelButton" type="button" tabindex="-1">取消</button>
+            <button class="small-button confirm-button" id="restartConfirmButton" type="button" tabindex="-1">重新开始</button>
           </div>
         </div>
       </div>
 
       <div class="overlay" id="targetOverlay" role="dialog" aria-modal="true" aria-labelledby="targetTitle" hidden>
         <div class="overlay-card target-card">
-          <p class="eyebrow">閫夋嫨鍚堟垚鐩爣</p>
-          <h2 id="targetTitle">浣犳兂鍚堟垚鍝釜闄㈢郴锛?/h2>
+          <p class="eyebrow">选择合成目标</p>
+          <h2 id="targetTitle">你想合成哪个院系？</h2>
           <div class="target-scroll">
             <div class="target-grid" id="targetGrid"></div>
           </div>
           <div class="target-actions">
-            <button class="small-button" id="targetCancelButton" type="button" tabindex="-1" hidden>鍙栨秷</button>
-            <button class="small-button confirm-button" id="targetRandomButton" type="button" tabindex="-1">闅忔満閫夋嫨鍚堟垚鐩爣</button>
+            <button class="small-button" id="targetCancelButton" type="button" tabindex="-1" hidden>取消</button>
+            <button class="small-button confirm-button" id="targetRandomButton" type="button" tabindex="-1">随机选择合成目标</button>
           </div>
         </div>
       </div>
     </div>
   </main>
 
-  <!-- 鐓ф惉 https://bu.eltaos.top/锛圙reatUSTC锛夌殑椤甸潰缁撴瀯锛涚Щ闄ゅ師绔欑粺璁¤剼鏈?-->
+  <!-- 照搬 https://bu.eltaos.top/（GreatUSTC）的页面结构；移除原站统计脚本 -->
   <script src="game-config.js?v=14"></script>
   <script src="game.js?v=14"></script>
 </body></html>
