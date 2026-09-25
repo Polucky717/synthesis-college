@@ -100,6 +100,7 @@
   var currentLevel = 0;
   var aimX = WORLD_WIDTH / 2;
   var readyToDrop = false;
+  var ballPrepared = false;   /* 下一颗小球是否已显示（深色外观下先显示、后放开投放） */
   var dropCooldown = 0;
   var activePointer = null;
   var nextItemId = 1;
@@ -126,9 +127,9 @@
   var ERO_FOCUS_MAX_AGE = 2.2;                   /* 单球视野跟随时长上限（秒） */
   var ERO_REVEAL_DURATION = 3.4;                 /* 达成后黑幕退散用时（秒） */
   var ERO_BLACKOUT_DURATION = 1.2;               /* 失败黑化用时（秒） */
-  var ERO_PILE_SPEED = 10;                       /* 判定“球堆已静止”的速度阈值（px/s） */
-  var ERO_PILE_HOLD = 0.18;                      /* 球堆需连续静止多久才允许下一投（秒） */
-  var ERO_PILE_MAX_WAIT = 3.0;                   /* 等待上限（秒）：极端情况下的安全阀，不会永久卡住投放 */
+  var ERO_PILE_SPEED = 14;                       /* 判定“球堆已静止”的速度阈值（px/s） */
+  var ERO_PILE_HOLD = 0.12;                      /* 球堆需连续静止多久才允许下一投（秒） */
+  var ERO_PILE_MAX_WAIT = 2.4;                   /* 等待上限（秒）：极端情况下的安全阀，不会永久卡住投放 */
   var eroFocusBody = null;                       /* 当前亮着的小球 */
   var eroFocusStable = 0;
   var eroFocusAge = 0;
@@ -1075,6 +1076,7 @@
     resetFrameClock();
     currentLevel = takeRandomLevel();
     aimX = WORLD_WIDTH / 2;
+    ballPrepared = true;
     readyToDrop = true;
     dropCooldown = 0;
     mode = "playing";
@@ -1108,6 +1110,7 @@
 
     mode = "ending";
     readyToDrop = false;
+    ballPrepared = false;
     activePointer = null;
     highestCelebration = null;
     celebrationParticles = [];
@@ -1195,6 +1198,7 @@
     items.push(dropped);
     focusEroBody(dropped);   /* 深色外观：视野跟随刚投放的小球 */
     maxLevelReached = Math.max(maxLevelReached, currentLevel);
+    ballPrepared = false;
     readyToDrop = false;
     dropCooldown = 0.42;
     playDropSound(currentLevel);
@@ -1203,7 +1207,9 @@
   function prepareNextItem() {
     currentLevel = takeRandomLevel();
     aimX = limitAimX(aimX);
-    readyToDrop = true;
+    ballPrepared = true;
+    /* 深色外观：小球冷却一结束就显示出来，但仍需等球堆静止才可投放 */
+    readyToDrop = !darkMode;
   }
 
   function getContact(a, b, extra) {
@@ -1761,10 +1767,10 @@
     if (!readyToDrop) {
       dropCooldown -= dt;
       if (dropCooldown <= 0) {
-        if (eroDropGateOpen(dt)) {
-          prepareNextItem();
-        } else {
-          dropCooldown = 0;   /* 冷却已结束，仍在等球堆静止（深色外观） */
+        if (!ballPrepared) {
+          prepareNextItem();          /* 冷却结束：小球立刻显示出来 */
+        } else if (eroDropGateOpen(dt)) {
+          readyToDrop = true;         /* 深色外观：球堆静止后才放开投放 */
         }
       }
     }
@@ -1891,8 +1897,8 @@
       eroFocusStable = 0;
       eroFocusAge = 0;
     }
-    /* 待释放小球的位置（即使球堆尚未静止也点亮投放点，避免黑屏无参照） */
-    if (mode === "playing") {
+    /* 待释放小球的位置（小球一显示就点亮投放点，避免黑屏无参照） */
+    if (mode === "playing" && ballPrepared) {
       var radius = LEVELS[currentLevel].radius;
       return { x: aimX, y: SPAWN_Y, r: radius * 2.5 };
     }
@@ -1991,20 +1997,47 @@
     eroFocusAge = 0;
   }
 
+  /* 黑幕上要挖出的视野孔：当前焦点球 + 已显示出来的待释放小球投放点
+   * （待释放小球必须一显示就看得见，否则要等视野从落球处交棒回来才“出现”） */
+  function eroVisionHoles() {
+    var holes = [];
+    var focus = eroFocusInfo();
+    if (focus) {
+      holes.push(focus);
+    }
+    if (mode === "playing" && ballPrepared) {
+      var radius = LEVELS[currentLevel].radius;
+      var spawn = { x: aimX, y: SPAWN_Y, r: radius * 2.5 };
+      var already = false;
+      for (var i = 0; i < holes.length; i += 1) {
+        if (Math.hypot(holes[i].x - spawn.x, holes[i].y - spawn.y) < Math.max(holes[i].r, spawn.r)) {
+          already = true;
+          break;
+        }
+      }
+      if (!already) {
+        holes.push(spawn);
+      }
+    }
+    return holes;
+  }
+
   function drawEroVision() {
     if (!eroVisionActive()) {
       return;
     }
-    var focus = eroFocusInfo();
+    var holes = eroVisionHoles();
     ctx.save();
-    if (!focus) {
+    if (holes.length === 0) {
       ctx.fillStyle = ERO_MASK_FILL;
       ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     } else {
       /* 单路径：外框 + 反向绕行的圆 → evenodd 填充挖出视野圆孔 */
       ctx.beginPath();
       ctx.rect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-      ctx.arc(focus.x, focus.y, focus.r, 0, Math.PI * 2, true);
+      for (var i = 0; i < holes.length; i += 1) {
+        ctx.arc(holes[i].x, holes[i].y, holes[i].r, 0, Math.PI * 2, true);
+      }
       ctx.fillStyle = ERO_MASK_FILL;
       ctx.fill("evenodd");
     }
@@ -2047,7 +2080,7 @@
   }
 
   function drawAimGuide() {
-    if (mode !== "playing" || !readyToDrop) {
+    if (mode !== "playing" || !ballPrepared) {
       return;
     }
 
@@ -2480,7 +2513,7 @@
 
     drawFailureBlasts();
 
-    if (mode === "playing" && readyToDrop) {
+    if (mode === "playing" && ballPrepared) {
       drawItem({
         level: currentLevel,
         radius: LEVELS[currentLevel].radius,
@@ -2652,9 +2685,11 @@
       vision: {
         mask: eroVisionActive(),
         focus: eroFocusBody ? eroFocusBody.id : null,
+        holes: eroVisionHoles().length,
         reveal: eroReveal ? 1 : 0
       },
       pileStable: !darkMode || eroPileStableTime >= ERO_PILE_HOLD,
+      ballPrepared: ballPrepared,
       canAct: mode === "playing" && readyToDrop,
       score: score,
       nextLevel: mode === "playing" && readyToDrop ? currentLevel : null,
