@@ -100,7 +100,6 @@
   var currentLevel = 0;
   var aimX = WORLD_WIDTH / 2;
   var readyToDrop = false;
-  var ballPrepared = false;   /* 下一颗小球是否已显示（深色外观下先显示、后放开投放） */
   var dropCooldown = 0;
   var activePointer = null;
   var nextItemId = 1;
@@ -121,35 +120,16 @@
 
   /* ===== 深色外观（参考「合成大群友」Erosion 挑战）：
    * 月饼院徽 + 暗色界面 + 只看得见当前小球周围一圈的视野黑幕 ===== */
-  var ERO_MASK_FILL = "rgba(4, 5, 7, 1)";         /* 视野黑幕：完全不透明、纯色（不留任何斜向渐变） */
+  var ERO_MASK_FILL = "rgba(7, 8, 10, 0.99)";     /* 视野黑幕（原版 Erosion 取值） */
   var ERO_FOCUS_SPEED = 6;                       /* 视为静止的速度阈值 */
   var ERO_FOCUS_STABLE = 0.45;                   /* 静止多久后视野交棒（秒） */
   var ERO_FOCUS_MAX_AGE = 2.2;                   /* 单球视野跟随时长上限（秒） */
   var ERO_REVEAL_DURATION = 3.4;                 /* 达成后黑幕退散用时（秒） */
   var ERO_BLACKOUT_DURATION = 1.2;               /* 失败黑化用时（秒） */
-  var ERO_PILE_SPEED = 14;                       /* 判定“球堆已静止”的速度阈值（px/s） */
-  var ERO_PILE_HOLD = 0.12;                      /* 球堆需连续静止多久才允许下一投（秒） */
-  var ERO_PILE_MAX_WAIT = 2.4;                   /* 等待上限（秒）：极端情况下的安全阀，不会永久卡住投放 */
   var eroFocusBody = null;                       /* 当前亮着的小球 */
   var eroFocusStable = 0;
   var eroFocusAge = 0;
-  var eroPileStableTime = 0;                     /* 球堆连续静止时长 */
-  var eroPileWaitTime = 0;                       /* 已等待球堆静止的时长 */
   var eroReveal = null;                          /* 达成：以目标球为中心向外退散的黑幕 */
-  var frameCamera = null;                        /* 本帧场景镜头（庆祝推近） */
-  var frameShakeX = 0;                           /* 本帧震屏偏移 */
-  var frameShakeY = 0;
-
-  /* 把本帧场景用到的镜头 + 震屏变换再套一遍（黑幕层要与小球严格对齐） */
-  function applySceneTransform(target) {
-    var surface = target || ctx;
-    if (frameCamera) {
-      surface.translate(frameCamera.x, frameCamera.y);
-      surface.scale(frameCamera.scale, frameCamera.scale);
-      surface.translate(-frameCamera.x, -frameCamera.y);
-    }
-    surface.translate(frameShakeX, frameShakeY);
-  }
 
   function clamp(value, minimum, maximum) {
     return Math.max(minimum, Math.min(maximum, value));
@@ -607,14 +587,14 @@
     var highMix = 0.86 + (seed % 2) * 0.03;
     var board = canvas.parentElement;
     if (darkMode) {
-      /* 深色外观：板面必须是“纯色、不透明”的底。
-       * 之前这里是斜向渐变（学院色混黑），画布又每帧清空，于是斜向色带会从
-       * 半透明黑幕里透出来、并在视野孔内整片露出，看起来就是“没遮住 + 斜边”。 */
+      /* 原版 Erosion 的深色板面：学院色混黑的斜向渐变 */
       if (board && board.style) {
-        board.style.background = mixWithBlack(rgb, 0.82);
+        board.style.background = "linear-gradient(" + dirBoard + ", "
+          + mixWithBlack(rgb, 0.86) + " 0%, " + mixWithBlack(rgb, 0.95) + " 100%)";
       }
       if (document.body && document.body.style) {
-        document.body.style.background = mixWithBlack(rgb, 0.9);
+        document.body.style.background = "linear-gradient(" + dirBody + ", "
+          + mixWithBlack(rgb, 0.95) + " 0%, " + mixWithBlack(rgb, 0.9) + " 100%)";
       }
       return;
     }
@@ -1091,7 +1071,6 @@
     resetFrameClock();
     currentLevel = takeRandomLevel();
     aimX = WORLD_WIDTH / 2;
-    ballPrepared = true;
     readyToDrop = true;
     dropCooldown = 0;
     mode = "playing";
@@ -1125,7 +1104,6 @@
 
     mode = "ending";
     readyToDrop = false;
-    ballPrepared = false;
     activePointer = null;
     highestCelebration = null;
     celebrationParticles = [];
@@ -1213,7 +1191,6 @@
     items.push(dropped);
     focusEroBody(dropped);   /* 深色外观：视野跟随刚投放的小球 */
     maxLevelReached = Math.max(maxLevelReached, currentLevel);
-    ballPrepared = false;
     readyToDrop = false;
     dropCooldown = 0.42;
     playDropSound(currentLevel);
@@ -1222,9 +1199,8 @@
   function prepareNextItem() {
     currentLevel = takeRandomLevel();
     aimX = limitAimX(aimX);
-    ballPrepared = true;
-    /* 深色外观：小球冷却一结束就显示出来，但仍需等球堆静止才可投放 */
-    readyToDrop = !darkMode;
+    /* 冷却一结束小球就显示出来，并且立刻可以投放（原版：不做球堆稳定强等） */
+    readyToDrop = true;
   }
 
   function getContact(a, b, extra) {
@@ -1782,11 +1758,7 @@
     if (!readyToDrop) {
       dropCooldown -= dt;
       if (dropCooldown <= 0) {
-        if (!ballPrepared) {
-          prepareNextItem();          /* 冷却结束：小球立刻显示出来 */
-        } else if (eroDropGateOpen(dt)) {
-          readyToDrop = true;         /* 深色外观：球堆静止后才放开投放 */
-        }
+        prepareNextItem();            /* 冷却结束：小球显示出来，并且马上可以投放 */
       }
     }
 
@@ -1912,30 +1884,12 @@
       eroFocusStable = 0;
       eroFocusAge = 0;
     }
-    /* 待释放小球的位置（小球一显示就点亮投放点，避免黑屏无参照） */
-    if (mode === "playing" && ballPrepared) {
+    /* 待释放小球的位置（没有焦点球时，视野停在投放点） */
+    if (mode === "playing" && readyToDrop) {
       var radius = LEVELS[currentLevel].radius;
       return { x: aimX, y: SPAWN_Y, r: radius * 2.5 };
     }
     return null;
-  }
-
-  /* 深色外观下：必须等球堆完全静止（稳定片刻）才能释放下一颗小球 */
-  function eroDropGateOpen(dt) {
-    if (!darkMode) {
-      eroPileWaitTime = 0;
-      return true;
-    }
-    if (eroPileStableTime >= ERO_PILE_HOLD) {
-      eroPileWaitTime = 0;
-      return true;
-    }
-    eroPileWaitTime += dt;
-    if (eroPileWaitTime >= ERO_PILE_MAX_WAIT) {
-      eroPileWaitTime = 0;   /* 安全阀：球堆长久微抖时不至于永远无法投放 */
-      return true;
-    }
-    return false;
   }
 
   function focusEroBody(body) {
@@ -1952,24 +1906,8 @@
       eroFocusBody = null;
       eroFocusStable = 0;
       eroFocusAge = 0;
-      eroPileStableTime = 0;
-      eroPileWaitTime = 0;
       eroReveal = null;
       return;
-    }
-    /* 球堆是否已完全静止（深色外观：静止才允许投放下一颗） */
-    var pileMoving = false;
-    for (var pileIndex = 0; pileIndex < items.length; pileIndex += 1) {
-      var pileBody = items[pileIndex];
-      if (pileBody.popTime > 0 || Math.hypot(pileBody.vx, pileBody.vy) > ERO_PILE_SPEED) {
-        pileMoving = true;
-        break;
-      }
-    }
-    if (pileMoving) {
-      eroPileStableTime = 0;
-    } else {
-      eroPileStableTime += dt;
     }
     if (eroFocusBody && items.indexOf(eroFocusBody) >= 0) {
       /* 视野跟随当前亮着的小球：小球稳定（速度趋零片刻）或超过单球跟随上限 →
@@ -2012,116 +1950,37 @@
     eroFocusAge = 0;
   }
 
-  /* 黑幕上要挖出的视野孔：当前焦点球 + 已显示出来的待释放小球投放点
-   * （待释放小球必须一显示就看得见，否则要等视野从落球处交棒回来才“出现”） */
+  /* 黑幕上要挖出的视野孔（原版 Erosion：只有一个「当前小球」的圆孔） */
   function eroVisionHoles() {
     var holes = [];
     var focus = eroFocusInfo();
     if (focus) {
       holes.push(focus);
     }
-    if (mode === "playing" && ballPrepared) {
-      var radius = LEVELS[currentLevel].radius;
-      var spawn = { x: aimX, y: SPAWN_Y, r: radius * 2.5 };
-      var already = false;
-      for (var i = 0; i < holes.length; i += 1) {
-        /* 只有待释放小球“完全”落在已有视野孔内时才可以省掉它自己的孔，
-         * 否则小球会被偏移的孔切掉一块（曾经只比较孔的大小，导致半个球露不出来） */
-        if (Math.hypot(holes[i].x - spawn.x, holes[i].y - spawn.y) + radius <= holes[i].r) {
-          already = true;
-          break;
-        }
-      }
-      if (!already) {
-        holes.push(spawn);
-      }
-    }
     return holes;
   }
 
-  /* 小球是否整个落在某个视野孔里 */
-  function eroHoleContainsBall(holes, x, y, radius) {
-    for (var i = 0; i < holes.length; i += 1) {
-      if (Math.hypot(holes[i].x - x, holes[i].y - y) + radius <= holes[i].r) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /* 任意两个视野孔是否重叠（重叠时必须走离屏擦除，否则会留下黑色透镜） */
-  function eroVisionHolesOverlap() {
-    var holes = eroVisionHoles();
-    for (var i = 0; i < holes.length; i += 1) {
-      for (var j = i + 1; j < holes.length; j += 1) {
-        if (Math.hypot(holes[i].x - holes[j].x, holes[i].y - holes[j].y) < holes[i].r + holes[j].r) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  /* 离屏黑幕画布：黑幕先在这里合成，再用 destination-out 擦出视野孔。
-   * 不能用 evenodd 单路径挖多个孔：两个孔重叠时重叠区会被重新填黑，
-   * 剩下两块“月牙”并带出斜直边（就是之前看到的斜光带 + 遮不干净）。 */
-  var eroMaskSurface = null;
-
-  function eroMaskContext() {
-    if (!eroMaskSurface) {
-      eroMaskSurface = document.createElement("canvas");
-    }
-    if (eroMaskSurface.width !== canvas.width || eroMaskSurface.height !== canvas.height) {
-      eroMaskSurface.width = canvas.width;
-      eroMaskSurface.height = canvas.height;
-    }
-    return eroMaskSurface.getContext ? eroMaskSurface.getContext("2d") : null;
-  }
-
-  /* 视野黑幕：整个板面铺满不透明黑，再擦出视野圆孔（孔内一切都能看见，
-   * 包括只露出一角的其它小球 —— 与原版 Erosion 一致） */
+  /* 视野黑幕：外框 + 反向绕行的圆孔 → evenodd 填充。圈内的一切都能看见，
+   * 包括只露出一角的其它小球（原版 Erosion 的行为） */
   function drawEroVision() {
     if (!eroVisionActive()) {
       return;
     }
     var holes = eroVisionHoles();
-    var maskCtx = eroMaskContext();
-    if (!maskCtx) {
-      /* 退化路径：没有 2D 上下文时直接在主画布上用 evenodd 挖孔 */
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(-64, -64, WORLD_WIDTH + 128, WORLD_HEIGHT + 128);
-      for (var f = 0; f < holes.length; f += 1) {
-        ctx.arc(holes[f].x, holes[f].y, holes[f].r, 0, Math.PI * 2, true);
-      }
-      ctx.fillStyle = ERO_MASK_FILL;
-      ctx.fill("evenodd");
-      ctx.restore();
-      return;
-    }
-    maskCtx.setTransform(1, 0, 0, 1, 0, 0);
-    maskCtx.globalCompositeOperation = "source-over";
-    maskCtx.clearRect(0, 0, eroMaskSurface.width, eroMaskSurface.height);
-    maskCtx.fillStyle = ERO_MASK_FILL;
-    maskCtx.fillRect(0, 0, eroMaskSurface.width, eroMaskSurface.height);
-
-    maskCtx.save();
-    maskCtx.globalCompositeOperation = "destination-out";
-    maskCtx.setTransform(canvasScaleX, 0, 0, canvasScaleY, 0, 0);
-    applySceneTransform(maskCtx);
-    maskCtx.fillStyle = "#000000";
-    for (var i = 0; i < holes.length; i += 1) {
-      maskCtx.beginPath();
-      maskCtx.arc(holes[i].x, holes[i].y, holes[i].r, 0, Math.PI * 2);
-      maskCtx.fill();
-    }
-    maskCtx.restore();
-
     ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(eroMaskSurface, 0, 0);
+    ctx.beginPath();
+    ctx.rect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    for (var i = 0; i < holes.length; i += 1) {
+      ctx.arc(holes[i].x, holes[i].y, holes[i].r, 0, Math.PI * 2, true);
+    }
+    ctx.fillStyle = ERO_MASK_FILL;
+    ctx.fill("evenodd");
     ctx.restore();
   }
+
+  /* eslint-disable-next-line no-unused-vars */
+
+  /* eslint-disable-next-line no-unused-vars */
 
   function drawEroReveal() {
     if (!eroReveal) {
@@ -2133,7 +1992,7 @@
     ctx.beginPath();
     ctx.rect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     ctx.arc(eroReveal.x, eroReveal.y, eroReveal.r + eased * Math.hypot(WORLD_WIDTH, WORLD_HEIGHT) * 0.62, 0, Math.PI * 2, true);
-    ctx.fillStyle = ERO_MASK_FILL;
+    ctx.fillStyle = "rgba(8, 8, 10, " + (0.99 * (1 - progress * 0.15)) + ")";
     ctx.fill("evenodd");
     ctx.restore();
   }
@@ -2153,13 +2012,13 @@
       return;
     }
     ctx.save();
-    ctx.fillStyle = "rgba(4, 5, 7, " + alpha + ")";
+    ctx.fillStyle = "rgba(6, 6, 8, " + (alpha * 0.97) + ")";
     ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     ctx.restore();
   }
 
   function drawAimGuide() {
-    if (mode !== "playing" || !ballPrepared) {
+    if (mode !== "playing" || !readyToDrop) {
       return;
     }
 
@@ -2192,21 +2051,18 @@
   }
 
   function drawItemBackground(radius) {
-    if (darkMode) {
-      /* 深色外观：球底也用纯色，避免视野孔里出现斜向渐变 */
-      ctx.beginPath();
-      ctx.arc(0, 0, radius, 0, Math.PI * 2);
-      ctx.fillStyle = "#14151b";
-      ctx.fill();
-      return;
-    }
     var angle = 120 * Math.PI / 180;
     var reach = radius * Math.SQRT2;
     var dx = Math.sin(angle) * reach;
     var dy = -Math.cos(angle) * reach;
     var gradient = ctx.createLinearGradient(-dx, -dy, dx, dy);
-    gradient.addColorStop(0, "#fdfbfb");
-    gradient.addColorStop(1, "#ebedee");
+    if (darkMode) {
+      gradient.addColorStop(0, "#17151d");
+      gradient.addColorStop(1, "#0a0a0d");
+    } else {
+      gradient.addColorStop(0, "#fdfbfb");
+      gradient.addColorStop(1, "#ebedee");
+    }
     ctx.beginPath();
     ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.fillStyle = gradient;
@@ -2565,12 +2421,6 @@
     ctx.setTransform(canvasScaleX, 0, 0, canvasScaleY, 0, 0);
     ctx.save();
 
-    /* 记录本帧的场景变换（庆祝镜头 + 震屏），深色外观的黑幕要用同一套变换，
-     * 否则震屏／镜头推进时小球与视野孔会错位，看起来像“遮了一半” */
-    frameCamera = null;
-    frameShakeX = 0;
-    frameShakeY = 0;
-
     if (highestCelebration && !highestCelebration.reduced) {
       var cameraAge = highestCelebration.age;
       var firstZoom = cameraAge < 0.9 ? Math.sin(cameraAge / 0.9 * Math.PI) : 0;
@@ -2578,16 +2428,17 @@
         ? Math.sin((cameraAge - 0.9) / 0.8 * Math.PI)
         : 0;
       var cameraScale = 1 + firstZoom * 0.09 + secondZoom * 0.035;
-      frameCamera = { x: highestCelebration.x, y: highestCelebration.y, scale: cameraScale };
       ctx.translate(highestCelebration.x, highestCelebration.y);
       ctx.scale(cameraScale, cameraScale);
       ctx.translate(-highestCelebration.x, -highestCelebration.y);
     }
 
+    var shakeX = 0;
+    var shakeY = 0;
     if (shake > 0.08) {
-      frameShakeX = (Math.random() - 0.5) * shake;
-      frameShakeY = (Math.random() - 0.5) * shake;
-      ctx.translate(frameShakeX, frameShakeY);
+      shakeX = (Math.random() - 0.5) * shake;
+      shakeY = (Math.random() - 0.5) * shake;
+      ctx.translate(shakeX, shakeY);
       shake *= 0.87;
     } else {
       shake = 0;
@@ -2604,7 +2455,7 @@
 
     drawFailureBlasts();
 
-    if (mode === "playing" && ballPrepared) {
+    if (mode === "playing" && readyToDrop) {
       drawItem({
         level: currentLevel,
         radius: LEVELS[currentLevel].radius,
@@ -2618,18 +2469,16 @@
     drawHighestCelebrationForeground();
     ctx.restore();
 
-    /* 视野黑幕 / 达成退散 / 失败黑化：使用与场景相同的镜头与震屏，保证视野孔与小球严格对齐；
-     * 警戒线在黑幕之上重绘，深色外观下始终可见 */
+    /* 视野黑幕 / 达成退散 / 失败黑化（原版 Erosion 渲染顺序：黑幕单独一层） */
     if (darkMode) {
       ctx.save();
       ctx.setTransform(canvasScaleX, 0, 0, canvasScaleY, 0, 0);
-      applySceneTransform();
       drawEroVision();
       drawEroReveal();
       ctx.restore();
       ctx.save();
       ctx.setTransform(canvasScaleX, 0, 0, canvasScaleY, 0, 0);
-      ctx.translate(frameShakeX, frameShakeY);
+      ctx.translate(shakeX, shakeY);
       if (mode === "playing" && !eroReveal) {
         drawDangerLine(now);
       }
@@ -2783,7 +2632,6 @@
         focus: eroFocusBody ? eroFocusBody.id : null,
         holes: eroVisionHoles().length,
         holeList: eroVisionHoles(),
-        overlap: eroVisionHolesOverlap(),
         reveal: eroReveal ? 1 : 0
       },
       spawn: {
@@ -2792,8 +2640,7 @@
         radius: LEVELS[currentLevel] ? LEVELS[currentLevel].radius : 0,
         shake: shake
       },
-      pileStable: !darkMode || eroPileStableTime >= ERO_PILE_HOLD,
-      ballPrepared: ballPrepared,
+      ballPrepared: readyToDrop,
       canAct: mode === "playing" && readyToDrop,
       score: score,
       nextLevel: mode === "playing" && readyToDrop ? currentLevel : null,
