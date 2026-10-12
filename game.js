@@ -4,6 +4,7 @@
  *   P1 渐进解锁投放（progressiveUnlock 配置：可投上限随合成进度提升，顶部平坦权重）
  *   P2 院徽运行时圆形徽章化（加载 assets/img/round/*.png 后自动白底圆形化+书院色描边）
  *   P3 可选合成目标（选书院为终极目标、其余随机排列、标题与背景主题随目标切换）+ 徽章显示微调
+ *   P4 深色外观视野（月饼院徽 + Erosion 式黑幕）：明亮小球交棒规则见下方「视野系统」注释
  * 其余逻辑与原站 game.js 保持一致。
  * ============================================================ */
 (function () {
@@ -121,14 +122,9 @@
   /* ===== 深色外观（参考「合成大群友」Erosion 挑战）：
    * 月饼院徽 + 暗色界面 + 只看得见当前小球周围一圈的视野黑幕 ===== */
   var ERO_MASK_FILL = "rgba(7, 8, 10, 0.99)";     /* 视野黑幕（原版 Erosion 取值） */
-  var ERO_FOCUS_SPEED = 6;                       /* 视为静止的速度阈值 */
-  var ERO_FOCUS_STABLE = 0.45;                   /* 静止多久后视野交棒（秒） */
-  var ERO_FOCUS_MAX_AGE = 2.2;                   /* 单球视野跟随时长上限（秒） */
   var ERO_REVEAL_DURATION = 3.4;                 /* 达成后黑幕退散用时（秒） */
   var ERO_BLACKOUT_DURATION = 1.2;               /* 失败黑化用时（秒） */
-  var eroFocusBody = null;                       /* 当前亮着的小球 */
-  var eroFocusStable = 0;
-  var eroFocusAge = 0;
+  var eroBrightBody = null;                      /* 当前明亮（唯一被照亮）的小球 */
   var eroReveal = null;                          /* 达成：以目标球为中心向外退散的黑幕 */
 
   function clamp(value, minimum, maximum) {
@@ -882,9 +878,7 @@
       return darkMode;
     }
     darkMode = value;
-    eroFocusBody = null;
-    eroFocusStable = 0;
-    eroFocusAge = 0;
+    eroBrightBody = null;
     eroReveal = null;
     saveDarkMode();
     applyAppearance();
@@ -1189,7 +1183,7 @@
     aimX = limitAimX(aimX);
     var dropped = makeItem(currentLevel, aimX, SPAWN_Y, 0, 20, "drop");
     items.push(dropped);
-    focusEroBody(dropped);   /* 深色外观：视野跟随刚投放的小球 */
+    lightEroBody(dropped);   /* 深色外观：新释放的小球立刻成为明亮小球（即使上一颗还在合成） */
     maxLevelReached = Math.max(maxLevelReached, currentLevel);
     readyToDrop = false;
     dropCooldown = 0.42;
@@ -1480,6 +1474,8 @@
       consumed.add(a.id);
       consumed.add(b.id);
 
+      /* 交棒判定必须在下面的 for 循环复用 first/second 之前算好（catch: var first 会覆盖 a） */
+      var brightInvolved = a === eroBrightBody || b === eroBrightBody;
       var totalMass = a.mass + b.mass;
       var x = (a.x * a.mass + b.x * b.mass) / totalMass;
       var y = (a.y * a.mass + b.y * b.mass) / totalMass;
@@ -1499,7 +1495,11 @@
       y = Math.min(y, FLOOR - radius);
       var mergedBody = makeItem(newLevel, x, y, vx, vy, "merge");
       created.push(mergedBody);
-      focusEroBody(mergedBody);   /* 深色外观：合成出的新球接管视野 */
+      /* 深色外观：只有上一个明亮小球参与合成，产物才成为新的明亮小球；
+       * 别的球（例如刚投放的新球）合成的产物保持暗着，不接管视野 */
+      if (brightInvolved) {
+        lightEroBody(mergedBody);
+      }
       /* 达成目标：合成出当前目标院系/校徽的球——两行横幅 + 球体闪烁庆祝 */
       if (LEVELS[newLevel] && LEVELS[newLevel].key === targetCollegeKey) {
         if (!targetAchieved) {
@@ -1867,24 +1867,30 @@
   }
 
   /* ===== 深色外观的视野系统（参考「合成大群友」Erosion 挑战）：
-   * 只看得见当前小球与周围一圈（可见半径 = 小球半径 × 2.5）圆环内的景象，
-   * 其余部分被近黑遮罩盖住；警戒线在黑幕之上重绘，始终可见。 ===== */
+   * 只看得见当前「明亮小球」与周围一圈（可见半径 = 小球半径 × 2.5）圆环内的景象，
+   * 其余部分被近黑遮罩盖住；警戒线在黑幕之上重绘，始终可见。
+   *
+   * 明亮小球交棒规则（P4，唯一一条）：
+   *   1. 释放一颗新球 → 这颗新球立刻成为明亮小球。此时哪怕上一个明亮小球还在
+   *      场上（甚至正在参与合成），焦点也归新球，绝不被回头抢走；
+   *   2. 一颗球变明亮后一直亮到自己被合成掉为止 —— 不因静止或超时提前交棒；
+   *   3. 新明亮小球必须由上一个明亮小球参与合成得到：只有「明亮小球参与的合成」
+   *      才产出一颗新的明亮小球，别的球合成的产物一律保持暗着，不接管视野；
+   *   4. 明亮小球被移除（合成 / 爆裂）而没有产物时，视野回到投放点等待下一颗球。 ===== */
 
   function eroVisionActive() {
     return darkMode && mode === "playing" && !eroReveal;
   }
 
-  function eroFocusInfo() {
-    if (eroFocusBody) {
-      if (items.indexOf(eroFocusBody) >= 0) {
-        return { x: eroFocusBody.x, y: eroFocusBody.y, r: eroFocusBody.radius * 2.5 };
+  function eroBrightInfo() {
+    if (eroBrightBody) {
+      if (items.indexOf(eroBrightBody) >= 0) {
+        return { x: eroBrightBody.x, y: eroBrightBody.y, r: eroBrightBody.radius * 2.5 };
       }
-      /* 亮着的小球已被合成/移除 → 立即交棒给下一个待释放小球 */
-      eroFocusBody = null;
-      eroFocusStable = 0;
-      eroFocusAge = 0;
+      /* 明亮小球已被合成/移除且没有产物 → 交棒给下一个待释放小球 */
+      eroBrightBody = null;
     }
-    /* 待释放小球的位置（没有焦点球时，视野停在投放点） */
+    /* 待释放小球的位置（没有明亮小球时，视野停在投放点） */
     if (mode === "playing" && readyToDrop) {
       var radius = LEVELS[currentLevel].radius;
       return { x: aimX, y: SPAWN_Y, r: radius * 2.5 };
@@ -1892,44 +1898,24 @@
     return null;
   }
 
-  function focusEroBody(body) {
-    if (!darkMode || !body) {
+  /* 点亮一颗小球：只有新释放的球、以及上一个明亮小球合成的产物会调用 */
+  function lightEroBody(body) {
+    if (!body) {
       return;
     }
-    eroFocusBody = body;
-    eroFocusStable = 0;
-    eroFocusAge = 0;
+    eroBrightBody = body;
   }
 
   function updateEroVision(dt) {
-    if (!darkMode) {
-      eroFocusBody = null;
-      eroFocusStable = 0;
-      eroFocusAge = 0;
-      eroReveal = null;
-      return;
-    }
-    if (eroFocusBody && items.indexOf(eroFocusBody) >= 0) {
-      /* 视野跟随当前亮着的小球：小球稳定（速度趋零片刻）或超过单球跟随上限 →
-       * 立即交棒给待释放小球；期间参与合成则由新球接管并重新计时 */
-      var speed = Math.hypot(eroFocusBody.vx, eroFocusBody.vy);
-      if (speed < ERO_FOCUS_SPEED) {
-        eroFocusStable += dt;
-      } else {
-        eroFocusStable = 0;
-      }
-      eroFocusAge += dt;
-      if (eroFocusStable >= ERO_FOCUS_STABLE || eroFocusAge >= ERO_FOCUS_MAX_AGE) {
-        eroFocusBody = null;
-        eroFocusStable = 0;
-        eroFocusAge = 0;
-      }
-    }
     if (eroReveal) {
       eroReveal.age += dt;
       if (eroReveal.age >= eroReveal.duration) {
         eroReveal = null;
       }
+    }
+    if (!darkMode) {
+      eroBrightBody = null;
+      eroReveal = null;
     }
   }
 
@@ -1945,15 +1931,13 @@
       age: 0,
       duration: prefersReducedMotion() ? 0.8 : ERO_REVEAL_DURATION
     };
-    eroFocusBody = null;
-    eroFocusStable = 0;
-    eroFocusAge = 0;
+    eroBrightBody = null;
   }
 
-  /* 黑幕上要挖出的视野孔（原版 Erosion：只有一个「当前小球」的圆孔） */
+  /* 黑幕上要挖出的视野孔（原版 Erosion：只有一个「当前明亮小球」的圆孔） */
   function eroVisionHoles() {
     var holes = [];
-    var focus = eroFocusInfo();
+    var focus = eroBrightInfo();
     if (focus) {
       holes.push(focus);
     }
@@ -2629,7 +2613,9 @@
       pickerCanCancel: pickerCanCancel,
       vision: {
         mask: eroVisionActive(),
-        focus: eroFocusBody ? eroFocusBody.id : null,
+        focus: eroBrightBody ? eroBrightBody.id : null,
+        bright: eroBrightBody ? eroBrightBody.id : null,
+        brightLevel: eroBrightBody ? eroBrightBody.level : null,
         holes: eroVisionHoles().length,
         holeList: eroVisionHoles(),
         reveal: eroReveal ? 1 : 0
@@ -2930,7 +2916,66 @@
     return true;
   }
 
-  /* 演示/测试钩子：在投放点附近造一颗小球并让它成为视野焦点（复现遮挡场景） */
+  /* 测试钩子：直接走真实合成流程把两颗同级球合掉（用于确定性验证明亮小球交棒规则） */
+  function machineDebugMerge(firstId, secondId) {
+    if (mode !== "playing") {
+      return false;
+    }
+    var a = null;
+    var b = null;
+    items.forEach(function (body) {
+      if (body.id === firstId) { a = body; }
+      if (body.id === secondId) { b = body; }
+    });
+    if (!a || !b || a === b || a.level !== b.level || a.level >= LEVELS.length - 1) {
+      return false;
+    }
+    var candidates = new Map();
+    var contact = getContact(a, b, 0.12);
+    if (!contact) {
+      /* 测试钩子：不在接触范围内时补一个贴合接触，让合成照样成立（走的是同一条真实合成流程） */
+      var gapDistance = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 0.001);
+      contact = {
+        nx: (b.x - a.x) / gapDistance,
+        ny: (b.y - a.y) / gapDistance,
+        penetration: 0
+      };
+    }
+    collectMergeCandidate(a, b, candidates, contact);
+    if (candidates.size === 0) {
+      return false;
+    }
+    applyMerges(candidates);
+    return true;
+  }
+
+  /* 测试钩子：把指定小球点亮成明亮小球（等价于它刚被释放） */
+  function machineDebugLight(id) {
+    if (mode !== "playing") {
+      return false;
+    }
+    var target = null;
+    items.forEach(function (body) {
+      if (body.id === id) { target = body; }
+    });
+    if (!target) {
+      return false;
+    }
+    lightEroBody(target);
+    return true;
+  }
+
+  /* 测试钩子：读取当前明亮小球（id / 位置 / 可见半径） */
+  function machineDebugBright() {
+    return {
+      lit: Boolean(eroBrightBody),
+      id: eroBrightBody ? eroBrightBody.id : null,
+      level: eroBrightBody ? eroBrightBody.level : null,
+      hole: eroBrightInfo()
+    };
+  }
+
+  /* 演示/测试钩子：在投放点附近造一颗小球并点亮它（复现遮挡场景） */
   function machineDebugFocusBall(level, dx, dy) {
     if (!darkMode || mode !== "playing" || !LEVELS[level]) {
       return false;
@@ -2943,7 +2988,7 @@
       0, 0, "merge"
     );
     items.push(body);
-    focusEroBody(body);
+    lightEroBody(body);
     return true;
   }
 
@@ -2957,6 +3002,9 @@
     debugSpawnPair: machineDebugSpawnPair,
     debugFillBoard: machineDebugFillBoard,
     debugFocusBall: machineDebugFocusBall,
+    debugBright: machineDebugBright,
+    debugMerge: machineDebugMerge,
+    debugLight: machineDebugLight,
     debugOpenPicker: function () {
       openTargetPicker();
       return mode;
